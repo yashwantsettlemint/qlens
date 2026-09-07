@@ -1,0 +1,32 @@
+table:
+  name: payments
+  schema: public
+object_relationships:
+  - name: invoice
+    using:
+      foreign_key_constraint_on: invoice_id
+insert_permissions:
+  - role: finance_user
+    permission:
+      check: {}
+      columns:
+        - invoice_id
+        - paid_at
+        - amount_paid
+select_permissions:
+  - role: finance_user
+    permission:
+      columns: "*"
+      filter: {}
+  - role: approver
+    permission:
+      columns: "*"
+      filter: {}
+update_permissions:
+  - role: finance_user
+    permission:
+      columns:
+        - paid_at
+        - amount_paid
+      filter: {}
+      check: {}

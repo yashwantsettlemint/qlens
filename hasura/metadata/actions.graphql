@@ -1,0 +1,22 @@
+type Mutation {
+  checkDuplicateSync(invoice: InvoiceCheckInput!): DuplicateCheckResult!
+}
+
+input InvoiceCheckInput {
+  invoiceNumber: String!
+  vendorId: uuid!
+  poId: uuid
+  amount: numeric!
+  taxAmount: numeric
+  department: String!
+  invoiceDate: String!
+  dueDate: String!
+}
+
+type DuplicateCheckResult {
+  isDuplicate: Boolean!
+  matchedInvoiceId: uuid
+  confidenceScore: Float
+  method: String
+  reason: String
+}

@@ -1,0 +1,184 @@
+"""
+GraphQL schema — the single contract shared by the mock resolvers, GraphQL
+Codegen, and (later) the real Hasura API.
+
+The object types + enums are the brief's data model verbatim. The Query /
+Mutation surface, filter/sort inputs, and the *Stats aggregate types are this
+app's read model — when the real endpoint is wired these map onto Hasura
+queries / views.
+"""
+
+type Vendor {
+  id: ID!
+  name: String!
+  taxId: String
+  paymentTermsDays: Int
+  invoices: [Invoice!]!
+}
+
+type PurchaseOrder {
+  id: ID!
+  poNumber: String!
+  vendor: Vendor!
+  amount: Float!
+  department: String!
+  status: String!
+}
+
+type Invoice {
+  id: ID!
+  invoiceNumber: String!
+  vendor: Vendor!
+  purchaseOrder: PurchaseOrder
+  invoiceDate: String!
+  dueDate: String!
+  amount: Float!
+  taxAmount: Float!
+  department: String!
+  approvalStatus: ApprovalStatus!
+  paymentStatus: PaymentStatus!
+  source: String!
+  """Days past the due date for an unpaid invoice; 0 otherwise."""
+  daysOverdue: Int!
+  duplicateFlag: DuplicateFlag
+  delayPrediction: DelayPrediction
+  approvalEvents: [ApprovalEvent!]!
+  payments: [Payment!]!
+}
+
+type DuplicateFlag {
+  matchedInvoiceId: ID!
+  matchedInvoice: Invoice
+  confidenceScore: Float!
+  reviewedStatus: String!
+}
+
+type DelayPrediction {
+  delayProbability: Float!
+  predictedDelayDays: Int!
+  modelVersion: String!
+}
+
+type Payment {
+  id: ID!
+  invoice: Invoice!
+  paidAt: String
+  amountPaid: Float!
+}
+
+type ApprovalEvent {
+  id: ID!
+  actor: String!
+  action: String!
+  note: String
+  at: String!
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+  OVERDUE
+}
+
+enum SortDir {
+  ASC
+  DESC
+}
+
+type DashboardStats {
+  pendingCount: Int!
+  pendingAmount: Float!
+  overdueCount: Int!
+  overdueAmount: Float!
+  vendorExposureTotal: Float!
+}
+
+type VendorStats {
+  vendor: Vendor!
+  totalInvoices: Int!
+  totalExposure: Float!
+  avgDelayDays: Float!
+  onTimePct: Float!
+}
+
+type VendorExposure {
+  vendorId: ID!
+  vendorName: String!
+  outstanding: Float!
+}
+
+type InvoicePage {
+  rows: [Invoice!]!
+  total: Int!
+  page: Int!
+  pageSize: Int!
+}
+
+input InvoiceFilter {
+  vendorId: ID
+  department: String
+  dateFrom: String
+  dateTo: String
+  approvalStatus: ApprovalStatus
+  paymentStatus: PaymentStatus
+  source: String
+  q: String
+}
+
+input InvoiceSort {
+  field: String!
+  dir: SortDir!
+}
+
+input InvoiceInput {
+  invoiceNumber: String!
+  vendorId: ID!
+  purchaseOrderId: ID
+  invoiceDate: String!
+  dueDate: String!
+  amount: Float!
+  taxAmount: Float!
+  department: String!
+  source: String!
+}
+
+type ImportError {
+  row: Int!
+  message: String!
+}
+
+type ImportResult {
+  created: Int!
+  failed: Int!
+  errors: [ImportError!]!
+}
+
+type AskAnswer {
+  text: String!
+  invoices: [Invoice!]!
+}
+
+type Query {
+  dashboardStats(vendorId: ID): DashboardStats!
+  invoices(filter: InvoiceFilter, sort: InvoiceSort, page: Int = 1, pageSize: Int = 25): InvoicePage!
+  invoice(id: ID!): Invoice
+  vendors: [VendorStats!]!
+  vendor(id: ID!): VendorStats
+  vendorExposure(vendorId: ID): [VendorExposure!]!
+  ask(prompt: String!): AskAnswer!
+}
+
+type Mutation {
+  approveInvoices(ids: [ID!]!): [Invoice!]!
+  setApproval(id: ID!, status: ApprovalStatus!, note: String): Invoice!
+  reviewDuplicate(invoiceId: ID!, status: String!): Invoice!
+  recordPayment(invoiceId: ID!, paidAt: String!, amountPaid: Float!): Payment!
+  createInvoice(input: InvoiceInput!): Invoice!
+  importInvoices(rows: [InvoiceInput!]!): ImportResult!
+}

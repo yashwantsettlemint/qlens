@@ -1,0 +1,9 @@
+DROP VIEW IF EXISTS vendor_exposure;
+DROP TABLE IF EXISTS delay_predictions;
+DROP TABLE IF EXISTS duplicate_flags;
+DROP TABLE IF EXISTS payments;
+DROP TABLE IF EXISTS approvals;
+DROP TABLE IF EXISTS invoice_line_items;
+DROP TABLE IF EXISTS invoices;
+DROP TABLE IF EXISTS purchase_orders;
+DROP TABLE IF EXISTS vendors;

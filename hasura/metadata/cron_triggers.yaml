@@ -1,0 +1,11 @@
+- name: overdue_sweep_daily
+  webhook: "{{NOTIFICATION_SERVICE_URL}}/overdue-sweep"
+  schedule: "0 2 * * *"
+  include_in_metadata: true
+  payload: {}
+  retry_conf:
+    num_retries: 2
+    retry_interval_seconds: 60
+    timeout_seconds: 120
+    tolerance_seconds: 21600
+  comment: "Daily 02:00 UTC — mark unpaid past-due invoices overdue and queue alerts"

@@ -1,0 +1,24 @@
+table:
+  name: purchase_orders
+  schema: public
+object_relationships:
+  - name: vendor
+    using:
+      foreign_key_constraint_on: vendor_id
+array_relationships:
+  - name: invoices
+    using:
+      foreign_key_constraint_on:
+        column: po_id
+        table:
+          name: invoices
+          schema: public
+select_permissions:
+  - role: finance_user
+    permission:
+      columns: "*"
+      filter: {}
+  - role: approver
+    permission:
+      columns: "*"
+      filter: {}

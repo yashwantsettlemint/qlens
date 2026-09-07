@@ -1,0 +1,7 @@
+{
+  "extends": ["next/core-web-vitals", "next/typescript"],
+  "ignorePatterns": ["graphql/generated/**"],
+  "rules": {
+    "@typescript-eslint/no-explicit-any": "off"
+  }
+}

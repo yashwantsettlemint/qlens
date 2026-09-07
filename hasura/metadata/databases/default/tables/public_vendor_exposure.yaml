@@ -1,0 +1,21 @@
+table:
+  name: vendor_exposure
+  schema: public
+object_relationships:
+  - name: vendor
+    using:
+      manual_configuration:
+        remote_table:
+          name: vendors
+          schema: public
+        column_mapping:
+          vendor_id: id
+select_permissions:
+  - role: finance_user
+    permission:
+      columns: "*"
+      filter: {}
+  - role: approver
+    permission:
+      columns: "*"
+      filter: {}

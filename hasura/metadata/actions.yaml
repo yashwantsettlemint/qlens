@@ -1,0 +1,18 @@
+actions:
+  - name: checkDuplicateSync
+    definition:
+      kind: synchronous
+      handler: "{{ML_SERVICE_URL}}/check-duplicate"
+      timeout: 15
+      forward_client_headers: true
+    permissions:
+      - role: finance_user
+      - role: admin
+    comment: Synchronous pre-insert duplicate check for the CSV / manual upload flow
+custom_types:
+  enums: []
+  input_objects:
+    - name: InvoiceCheckInput
+  objects:
+    - name: DuplicateCheckResult
+  scalars: []

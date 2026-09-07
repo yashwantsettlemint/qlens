@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Single light theme — this is a wide-desktop internal ops tool, no dark mode.
+ * Status vocabulary lives here and in tailwind.config.ts; read it via lib/status.ts.
+ */
+:root {
+  --ground: #f6f7f9;
+  --surface: #ffffff;
+  --ink: #1b2430;
+  --ink-muted: #5b6675;
+  --line: #e2e5ea;
+  --accent: #0b5fa5;
+  --accent-ink: #ffffff;
+
+  --genai: #3b4cc4;
+  --genai-tint: #eef0fb;
+
+  --ok-fg: #1b6b3a;
+  --ok-bg: #ddf1e4;
+  --warn-fg: #92600a;
+  --warn-bg: #fbf0da;
+  --bad-fg: #a62121;
+  --bad-bg: #fbe3e1;
+  --dup-fg: #6b3fa0;
+  --dup-bg: #eee7f7;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  color: var(--ink);
+  background: var(--ground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numeric/identifier cells align on tabular figures for column scanning */
+.tabular {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Consistent, quiet focus ring for keyboard users */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cdd2d9;
+  border-radius: 5px;
+  border: 2px solid var(--ground);
+}

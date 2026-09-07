@@ -1,0 +1,29 @@
+table:
+  name: approvals
+  schema: public
+object_relationships:
+  - name: invoice
+    using:
+      foreign_key_constraint_on: invoice_id
+select_permissions:
+  - role: finance_user
+    permission:
+      columns: "*"
+      filter: {}
+  - role: approver
+    permission:
+      columns: "*"
+      filter: {}
+update_permissions:
+  - role: approver
+    permission:
+      # approvers may only act on their own approval rows, and only these fields
+      columns:
+        - status
+        - acted_at
+      filter:
+        approver:
+          _eq: X-Hasura-User-Id
+      check:
+        approver:
+          _eq: X-Hasura-User-Id

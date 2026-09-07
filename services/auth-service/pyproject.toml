@@ -1,0 +1,17 @@
+[project]
+name = "auth-service"
+version = "0.1.0"
+description = "Issues Hasura-shaped JWTs for a mock user directory (dev only)"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "invoice-tracker-shared-types",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]

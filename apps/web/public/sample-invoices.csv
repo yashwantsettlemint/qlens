@@ -1,0 +1,7 @@
+invoiceNumber,vendor,department,invoiceDate,dueDate,amount,taxAmount,source
+ACME/26-27/3001,Havells India Ltd,IT,2026-08-04,2026-09-03,142000,25560,csv
+ACME/26-27/3002,Blue Dart Express Ltd,Logistics,2026-08-09,2026-08-24,38500,6930,csv
+ACME/26-27/3003,Asian Paints Ltd,Facilities,2026-08-12,2026-09-11,268000,48240,csv
+ACME/26-27/3004,Nonexistent Traders Pvt Ltd,Procurement,2026-08-15,2026-09-14,90000,16200,csv
+ACME/26-27/3005,Zensar Technologies Ltd,IT,2026-08-18,2026-08-10,175000,31500,csv
+ACME/26-27/3006,Godrej & Boyce Mfg Co,Procurement,2026-08-20,2026-09-19,54000,9720,csv

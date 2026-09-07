@@ -1,0 +1,23 @@
+# Node (apps/web has its own .gitignore too)
+node_modules/
+.next/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# ML artifacts
+services/ml-service/models/*.pkl
+
+# secrets / local env
+.env
+.env.local
+infra/.env
+
+.DS_Store
+
+services/ml-service/data/*.csv

@@ -1,0 +1,146 @@
+name: invoice-tracker
+
+# Foundation stack: Postgres + Hasura (migrations & metadata auto-applied) + a
+# one-shot seed loader. The four FastAPI services are wired in the block at the
+# bottom — uncomment as each is built (services pass).
+#
+# All services read infra/.env via env_file.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    env_file: [.env]
+    ports:
+      # host 5433 to avoid clashing with a local Postgres; containers use 5432 over the compose network
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  hasura:
+    image: hasura/graphql-engine:v2.42.0.cli-migrations-v3
+    restart: unless-stopped
+    env_file: [.env]
+    ports:
+      - "8088:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ../hasura/migrations:/hasura-migrations
+      - ../hasura/metadata:/hasura-metadata
+    environment:
+      HASURA_GRAPHQL_ENABLE_CONSOLE: "true"
+      HASURA_GRAPHQL_DEV_MODE: "true"
+      HASURA_GRAPHQL_ENABLED_LOG_TYPES: startup,http-log,webhook-log,websocket-log,query-log
+    healthcheck:
+      # graphql-engine images ship curl; if a future tag drops it, probe externally instead.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  seed:
+    image: postgres:16
+    restart: "no"
+    env_file: [.env]
+    depends_on:
+      hasura:
+        condition: service_healthy
+    volumes:
+      - ../hasura/seeds/default:/seeds:ro
+    command: ["sh", "-c", "psql \"$$PG_DATABASE_URL\" -v ON_ERROR_STOP=1 -f /seeds/1730000000001_seed.sql"]
+
+  ingestion-service:
+    build:
+      context: ..
+      dockerfile: services/ingestion-service/Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      HASURA_ENDPOINT: http://hasura:8080/v1/graphql
+      HASURA_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-devsecret}
+    ports:
+      # host 8091 to dodge a local service on 8001; container listens on 8001
+      - "8091:8001"
+    depends_on:
+      hasura:
+        condition: service_healthy
+    healthcheck: &pyhealth
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8001/health').status==200 else sys.exit(1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  ml-service:  # target of the invoices event trigger (/score) + checkDuplicateSync action (/check-duplicate)
+    build:
+      context: ..
+      dockerfile: services/ml-service/Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      HASURA_ENDPOINT: http://hasura:8080/v1/graphql
+      HASURA_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-devsecret}
+    ports:
+      - "8092:8002"
+    depends_on:
+      hasura:
+        condition: service_healthy
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\""]
+
+  genai-service:  # authenticates to Hasura as role genai_readonly only (self-minted JWT)
+    build:
+      context: ..
+      dockerfile: services/genai-service/Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      HASURA_ENDPOINT: http://hasura:8080/v1/graphql
+    ports:
+      - "8093:8003"
+    depends_on:
+      hasura:
+        condition: service_healthy
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8003/health')\""]
+
+  notification-service:  # target of the overdue_sweep_daily cron trigger (/overdue-sweep)
+    build:
+      context: ..
+      dockerfile: services/notification-service/Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      HASURA_ENDPOINT: http://hasura:8080/v1/graphql
+      HASURA_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-devsecret}
+    ports:
+      - "8094:8004"
+    depends_on:
+      hasura:
+        condition: service_healthy
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8004/health')\""]
+
+  auth-service:  # mock login -> Hasura-shaped HS256 JWTs (dev only)
+    build:
+      context: ..
+      dockerfile: services/auth-service/Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    ports:
+      - "8095:8005"
+    healthcheck:
+      <<: *pyhealth
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8005/health')\""]
+
+volumes:
+  pgdata:
