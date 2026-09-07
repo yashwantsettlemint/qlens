@@ -5,6 +5,7 @@
  * to change. This is the Hasura-backed sibling of mock/resolvers.ts.
  */
 import { hasura, GENAI_URL } from "./hasura";
+import { requireRole } from "./auth";
 import { validateInvoiceInput } from "../lib/validateInvoice";
 
 const TODAY = new Date();
@@ -302,6 +303,7 @@ export const resolvers = {
 
   Mutation: {
     async approveInvoices(_: unknown, { ids }: { ids: string[] }) {
+      requireRole("approver", "admin");
       const data = await hasura(
         `mutation Approve($ids: [uuid!]!, $rows: [approvals_insert_input!]!) {
            update_invoices(where: { id: { _in: $ids }, approval_status: { _eq: "pending" } }, _set: { approval_status: "approved" }) {
@@ -324,6 +326,7 @@ export const resolvers = {
       _: unknown,
       { id, status, note }: { id: string; status: string; note?: string | null },
     ) {
+      requireRole("approver", "admin");
       const s = status.toLowerCase();
       const data = await hasura(
         `mutation SetApproval($id: uuid!, $row: [approvals_insert_input!]!, $status: String!) {
@@ -345,6 +348,7 @@ export const resolvers = {
       _: unknown,
       { invoiceId, status }: { invoiceId: string; status: string },
     ) {
+      requireRole("finance_user", "approver", "admin");
       const data = await hasura(
         `mutation Review($id: uuid!, $status: String!) {
            update_duplicate_flags(where: { invoice_id: { _eq: $id } }, _set: { reviewed_status: $status }) { affected_rows }
@@ -359,6 +363,7 @@ export const resolvers = {
       _: unknown,
       { invoiceId, paidAt, amountPaid }: { invoiceId: string; paidAt: string; amountPaid: number },
     ) {
+      requireRole("finance_user", "admin");
       const data = await hasura(
         `mutation Pay($p: payments_insert_input!, $id: uuid!) {
            insert_payments_one(object: $p) { id paid_at amount_paid }
@@ -371,6 +376,7 @@ export const resolvers = {
     },
 
     async createInvoice(_: unknown, { input }: { input: any }) {
+      requireRole("finance_user", "admin");
       const data = await hasura(
         `mutation Create($o: invoices_insert_input!) { insert_invoices_one(object: $o) { ${INVOICE_SEL} } }`,
         { o: toInsert(input) },
@@ -379,6 +385,7 @@ export const resolvers = {
     },
 
     async importInvoices(_: unknown, { rows }: { rows: any[] }) {
+      requireRole("finance_user", "admin");
       const vendorIds: Set<string> = new Set(
         (await hasura(`query { vendors { id } }`)).vendors.map((v: any) => v.id),
       );
