@@ -6,6 +6,7 @@ import { useMutation } from "@apollo/client";
 import { CreateInvoiceMutation } from "@/graphql/operations/mutations";
 import { Field, Select, TextInput, DateInput } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
+import { Callout } from "@/components/ui/Callout";
 import { DEPARTMENTS, INVOICE_SOURCES } from "@/lib/constants";
 import { validateInvoiceInput } from "@/lib/validateInvoice";
 
@@ -123,17 +124,15 @@ export function ManualInvoiceForm({ vendors }: { vendors: VendorOption[] }) {
         </Field>
       </div>
 
-      {error && (
-        <p className="border border-bad-fg/30 bg-bad-bg px-3 py-2 text-sm text-bad-fg">{error}</p>
-      )}
+      {error && <Callout tone="bad">{error}</Callout>}
       {data?.createInvoice && (
-        <p className="border border-ok-fg/30 bg-ok-bg px-3 py-2 text-sm text-ok-fg">
+        <Callout tone="ok">
           Created{" "}
           <Link href={`/invoices/${data.createInvoice.id}`} className="font-medium underline">
             {data.createInvoice.invoiceNumber}
           </Link>{" "}
           — it’s now pending approval.
-        </p>
+        </Callout>
       )}
 
       <Button variant="primary" type="submit" disabled={loading}>

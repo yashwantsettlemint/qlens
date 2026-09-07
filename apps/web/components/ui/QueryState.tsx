@@ -1,4 +1,5 @@
 import type { ApolloError } from "@apollo/client";
+import { Callout } from "./Callout";
 
 /** Uniform loading / error rendering for a query-backed section. */
 export function QueryState({
@@ -13,11 +14,7 @@ export function QueryState({
   minRows?: number;
 }) {
   if (error) {
-    return (
-      <div className="border border-bad-fg/30 bg-bad-bg px-4 py-3 text-sm text-bad-fg">
-        Couldn’t load this data. {error.message}
-      </div>
-    );
+    return <Callout tone="bad">Couldn’t load this data. {error.message}</Callout>;
   }
   if (loading) {
     return (

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useRole } from "@/lib/role";
 import { Button } from "@/components/ui/Button";
+import { Callout } from "@/components/ui/Callout";
 import { Field, TextInput } from "@/components/ui/Field";
 
 const DEV_USERS = [
@@ -39,9 +40,11 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-ground px-4">
-      <div className="w-full max-w-sm border border-line bg-surface p-6">
-        <div className="mb-1 text-sm font-semibold text-ink">Payables Desk</div>
-        <div className="mb-5 text-xs text-ink-muted">Sign in to continue</div>
+      <div className="w-full max-w-sm border border-line bg-surface">
+        <div className="h-1 bg-accent" />
+        <div className="p-6">
+          <div className="text-sm font-semibold text-ink">Payables Desk</div>
+          <div className="mb-5 text-2xs text-ink-muted">Invoice &amp; vendor payments — sign in to continue</div>
 
         <form
           onSubmit={(e) => {
@@ -67,9 +70,9 @@ export default function LoginPage() {
             />
           </Field>
           {error && (
-            <p className="border border-bad-fg/30 bg-bad-bg px-3 py-2 text-xs text-bad-fg">
+            <Callout tone="bad" className="text-xs">
               {error}
-            </p>
+            </Callout>
           )}
           <Button type="submit" variant="primary" className="w-full" disabled={busy || !username}>
             {busy ? "Signing in…" : "Sign in"}
@@ -99,11 +102,12 @@ export default function LoginPage() {
                 loginOffline("approver");
                 router.replace("/");
               }}
-              className="mt-3 w-full rounded border border-warn-fg/40 bg-warn-bg px-3 py-1.5 text-xs text-warn-fg"
+              className="mt-3 w-full rounded border border-warn-fg/40 bg-warn-bg px-3 py-1.5 text-xs text-warn-fg hover:bg-warn-bg/70"
             >
               Continue in demo mode as Approver (no backend)
             </button>
           )}
+          </div>
         </div>
       </div>
     </div>

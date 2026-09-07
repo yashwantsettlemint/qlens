@@ -3,6 +3,7 @@
 import { useMutation } from "@apollo/client";
 import { ImportInvoicesMutation } from "@/graphql/operations/mutations";
 import { Button } from "@/components/ui/Button";
+import { Callout } from "@/components/ui/Callout";
 import { cn } from "@/lib/cn";
 import { inr } from "@/lib/format";
 import type { ParsedInvoiceRow } from "@/lib/csv";
@@ -40,19 +41,21 @@ export function CsvPreviewTable({
       </div>
 
       {parseErrors.length > 0 && (
-        <ul className="border border-bad-fg/30 bg-bad-bg px-3 py-2 text-xs text-bad-fg">
-          {parseErrors.map((e, i) => (
-            <li key={i}>{e}</li>
-          ))}
-        </ul>
+        <Callout tone="bad">
+          <ul className="list-inside list-disc space-y-0.5">
+            {parseErrors.map((e, i) => (
+              <li key={i}>{e}</li>
+            ))}
+          </ul>
+        </Callout>
       )}
 
       {data?.importInvoices && (
-        <p className="border border-ok-fg/30 bg-ok-bg px-3 py-2 text-sm text-ok-fg">
+        <Callout tone="ok">
           Imported {data.importInvoices.created} invoice
           {data.importInvoices.created === 1 ? "" : "s"}.{" "}
           {data.importInvoices.failed > 0 && `${data.importInvoices.failed} skipped.`}
-        </p>
+        </Callout>
       )}
 
       <div className="overflow-x-auto border border-line">
