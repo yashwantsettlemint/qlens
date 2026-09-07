@@ -67,19 +67,23 @@ TOKEN=$(curl -s localhost:8095/login -d '{"username":"kavya","password":"kavya"}
 curl -s localhost:8088/v1/graphql -H "Authorization: Bearer $TOKEN" -d '{"query":"{ invoices(limit:1){invoice_number} }"}'
 ```
 
-## Point the frontend at real Hasura
+## Run the frontend against the real backend
 
-`apps/web/.env.local`:
-```
-NEXT_PUBLIC_HASURA_ENDPOINT=http://localhost:8088/v1/graphql
-NEXT_PUBLIC_HASURA_JWT=<token from auth-service /login>   # or NEXT_PUBLIC_HASURA_ADMIN_SECRET=devsecret
+`apps/web` keeps its own GraphQL contract (`graphql/schema.graphql`). By default it runs
+that schema in-browser against mock data. Set `NEXT_PUBLIC_BACKEND=hasura` and the browser
+instead posts the same operations to `/api/graphql`, a Next server route that resolves them
+against Hasura + genai-service (`apps/web/server/resolvers.ts`) — the admin secret stays
+server-side, and no component / operation / codegen output changes.
+
+```bash
+cd apps/web
+cp .env.example .env.local          # NEXT_PUBLIC_BACKEND=hasura, HASURA_ENDPOINT, GENAI_SERVICE_URL
+npm run dev                         # http://localhost:3000 (or next free port)
 ```
 
-**Gap:** `apps/web` still queries its own mock GraphQL surface
-(`invoices(filter/sort/page)`, `dashboardStats`, `ask`), not what Hasura generates
-(`invoices(where/order_by/limit/offset)`, `vendor_exposure`, …). Setting the endpoint
-switches transport; the operations in `apps/web/graphql/operations/` need rewriting against
-the Hasura schema. Frontend follow-up, not part of the backend brief.
+The BFF route translates: camelCase ⇄ snake_case, `PENDING`/`UNPAID` ⇄ `pending`/`unpaid`,
+`daysOverdue` + effective `OVERDUE` computed, `dashboardStats` / `vendorStats` /
+`vendorExposure` via `invoices_aggregate`, `ask` proxied to genai-service `/summarize`.
 
 ## Status
 
@@ -93,4 +97,4 @@ the Hasura schema. Frontend follow-up, not part of the backend brief.
 | `services/ml-service` (+ synthetic-data / train / predict) | **done** |
 | `services/genai-service` (Azure OpenAI + offline fallback) | **done** |
 | `services/notification-service` | **done** |
-| frontend operations rewritten for Hasura schema | not started |
+| frontend ↔ real backend (`/api/graphql` BFF) | **done** — `NEXT_PUBLIC_BACKEND=hasura` |
