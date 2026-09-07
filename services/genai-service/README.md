@@ -8,7 +8,7 @@ whitelist in `app/whitelist.py` — no schema introspection, no arbitrary tables
 |---|---|---|---|
 | POST | `/summarize` | `{question}` | `{summary, invoice_ids, row_count, query}` |
 | POST | `/explain-duplicate` | `{invoice_id}` | `{explanation, confidence_score, method, matched_invoice_id}` — explains the **existing** flag, never re-derives |
-| POST | `/extract-ocr` | multipart PDF | stubbed `{fields: {name: {value, confidence}}, status: "pending_review"}` — `TODO` for the real provider |
+| POST | `/extract-ocr` | multipart PDF | `{status, source, fields: {name: {value, confidence}}}` — reads the PDF **text layer** (LLM, or offline regex). Image / scanned PDFs have no text layer → `status: "pending_review"` (needs a vision provider — see `app/ocr.py`) |
 | GET | `/health` | — | `{status, llm: "offline" | "azure-openai"}` |
 
 **LLM path** (`/summarize`): the model gets one `query_invoices` tool constrained to the
@@ -17,7 +17,13 @@ four whitelisted tables; it picks table + `where` + `order_by`, we build + run t
 score + matched fields and asks for a plain-language paragraph.
 
 **Offline** (no `AZURE_OPENAI_*`): a keyword router picks the query and a template writes
-the summary. Everything works, just less fluent.
+the summary. `/extract-ocr` falls back to regex field-matching. Everything works, just
+less fluent.
+
+**`/extract-ocr`**: `pypdf` pulls the text layer; the LLM (tool call) or, offline, a set
+of regexes map it to `{value, confidence}` per field. No text layer (scanned image) →
+`pending_review` with an empty skeleton — real OCR needs a vision provider, plugged into
+the fallback branch in `app/main.py`.
 
 ## Config
 
@@ -33,7 +39,7 @@ the summary. Everything works, just less fluent.
 ```bash
 python -m venv .venv && . .venv/Scripts/activate
 pip install -e ../../packages/shared-types -e .
-python tests/test_query_builder.py
+python tests/test_query_builder.py && python tests/test_ocr.py
 uvicorn app.main:app --port 8093
 curl -s localhost:8093/summarize -d '{"question":"which invoices are overdue?"}' -H 'content-type: application/json'
 ```

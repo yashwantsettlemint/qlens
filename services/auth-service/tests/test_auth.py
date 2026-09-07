@@ -10,7 +10,7 @@ os.environ.setdefault(
 
 from shared_types.jwt import HASURA_NAMESPACE, decode_hasura_jwt  # noqa: E402
 from app.users import authenticate  # noqa: E402
-from app.main import login, me, LoginRequest  # noqa: E402
+from app.main import login, me, refresh, LoginRequest  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
 
@@ -29,6 +29,17 @@ def run() -> None:
     assert claims["exp"] > claims["iat"]
 
     assert me(authorization=f"Bearer {tok.access_token}")[HASURA_NAMESPACE]["x-hasura-default-role"] == "approver"
+
+    # /refresh re-issues a valid token with the same role/user
+    fresh = refresh(authorization=f"Bearer {tok.access_token}")
+    assert fresh.role == "approver"
+    fc = decode_hasura_jwt(fresh.access_token)[HASURA_NAMESPACE]
+    assert fc["x-hasura-user-id"] == "priya.nair"
+    try:
+        refresh(authorization="")
+        raise AssertionError("expected 401 for missing token")
+    except HTTPException as e:
+        assert e.status_code == 401
 
     try:
         login(LoginRequest(username="priya.nair", password="nope"))

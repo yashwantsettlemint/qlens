@@ -1,7 +1,8 @@
 """auth-service — mock login that issues Hasura-shaped JWTs.
 
-  POST /login   {username, password}      -> {access_token, token_type, expires_in, role}
-  GET  /me      Authorization: Bearer ..  -> decoded claims
+  POST /login    {username, password}     -> {access_token, token_type, expires_in, role}
+  POST /refresh  Authorization: Bearer .. -> a fresh token (while the old one is still valid)
+  GET  /me       Authorization: Bearer .. -> decoded claims
   GET  /health
 
 The token carries the `https://hasura.io/jwt/claims` block Hasura expects; send
@@ -61,6 +62,24 @@ def login(req: LoginRequest) -> TokenResponse:
 
 @app.get("/me")
 def me(authorization: str = Header(default="")) -> dict:
+    return _claims_from(authorization)
+
+
+@app.post("/refresh", response_model=TokenResponse)
+def refresh(authorization: str = Header(default="")) -> TokenResponse:
+    """Re-issue a token while the current one is still valid. Once it has
+    expired the client must log in again (no offline grace — keep it simple)."""
+    claims = _claims_from(authorization)
+    ns = claims.get("https://hasura.io/jwt/claims", {})
+    role = ns.get("x-hasura-default-role", "")
+    user = ns.get("x-hasura-user-id") or claims.get("sub", "")
+    if not (role and user):
+        raise HTTPException(401, "token missing hasura claims")
+    token = mint_hasura_jwt(role, user, ttl_seconds=TTL_SECONDS)
+    return TokenResponse(access_token=token, expires_in=TTL_SECONDS, role=role)
+
+
+def _claims_from(authorization: str) -> dict:
     if not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "missing Bearer token")
     try:

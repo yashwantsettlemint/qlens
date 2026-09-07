@@ -1,9 +1,11 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 /**
- * Minimal HS256 verify for the Hasura-shaped tokens auth-service issues.
- * Checks signature + expiry; pulls role/user out of the hasura claims block.
- * No dependency — the BFF just needs to trust or reject the token.
+ * Minimal HS256 verify/sign for the Hasura-shaped tokens auth-service issues.
+ * verifyHS256 checks signature + expiry and pulls role/user out of the hasura
+ * claims block; signHS256 re-mints a role-scoped token so the BFF can call
+ * Hasura *as the signed-in user's role* instead of with the admin secret.
+ * No dependency — HS256 is one HMAC.
  */
 export interface Claims {
   sub: string;
@@ -11,6 +13,33 @@ export interface Claims {
   exp: number;
   role: string;
   user: string;
+}
+
+const HASURA_NS = "https://hasura.io/jwt/claims";
+const b64url = (b: Buffer) => b.toString("base64url");
+
+/** Re-mint a short-lived Hasura JWT carrying `claims.role` as the default role. */
+export function signHS256(claims: Claims, secretRaw: string, ttlSeconds = 300): string {
+  const k = key(secretRaw);
+  if (!k) throw new Error("HASURA_GRAPHQL_JWT_SECRET is not set");
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64url(Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })));
+  const payload = b64url(
+    Buffer.from(
+      JSON.stringify({
+        sub: claims.user,
+        iat: now - 60, // absorb clock skew — Hasura rejects a future iat
+        exp: now + ttlSeconds,
+        [HASURA_NS]: {
+          "x-hasura-default-role": claims.role,
+          "x-hasura-allowed-roles": [claims.role],
+          "x-hasura-user-id": claims.user,
+        },
+      }),
+    ),
+  );
+  const sig = b64url(createHmac("sha256", k).update(`${header}.${payload}`).digest());
+  return `${header}.${payload}.${sig}`;
 }
 
 function key(secretRaw: string): string {

@@ -2,7 +2,8 @@
 
   POST /summarize         {question}     -> {summary, invoice_ids, query}
   POST /explain-duplicate {invoice_id}   -> {explanation, confidence_score, method}
-  POST /extract-ocr       PDF upload     -> stubbed field guesses (pending review)
+  POST /extract-ocr       PDF upload     -> invoice fields from the PDF text layer
+                                            (LLM or offline regex); image PDFs -> pending review
   GET  /health
 
 Reads Hasura only as `genai_readonly` and only through the whitelist.
@@ -13,7 +14,7 @@ from __future__ import annotations
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from . import config, llm
+from . import config, llm, ocr
 from .hasura import HasuraError, fetch_duplicate_context, run_query
 from .query_builder import build, route_offline, spec_from_tool_args
 from .whitelist import NotAllowed
@@ -92,25 +93,37 @@ async def explain_duplicate(req: ExplainRequest) -> dict:
 
 @app.post("/extract-ocr")
 async def extract_ocr(file: UploadFile = File(...)) -> dict:
+    """Read invoice fields from an uploaded PDF's text layer (LLM, or offline
+    regex). Image / scanned PDFs have no text layer and get a pending-review
+    skeleton — real OCR needs a vision provider (see app/ocr.py)."""
     raw = await file.read()
-    # TODO: send `raw` to Azure Document Intelligence / a vision model; map the
-    # response to per-field {value, confidence}. Until then, return an empty
-    # skeleton so the UI can render a pending-review card rather than auto-commit.
-    empty = {"value": None, "confidence": 0.0}
+    text = ocr.pdf_text(raw)
+    if not text:
+        return {
+            "status": "pending_review",
+            "note": "No text layer — image / scanned documents need an OCR / vision "
+                    "provider, which is not wired (see app/ocr.py).",
+            "filename": file.filename,
+            "size_bytes": len(raw),
+            "fields": ocr.empty_fields(),
+        }
+
+    fields = None
+    try:
+        fields = llm.extract_invoice_fields(text)
+    except Exception:  # LLM outage -> offline regex
+        fields = None
+    source = "llm"
+    if fields is None:
+        fields, source = ocr.regex_fields(text), "regex"
+
+    filled = sum(1 for f in fields.values() if f["value"] not in (None, ""))
     return {
-        "status": "pending_review",
-        "note": "OCR/vision provider not wired — see TODO in app/main.py",
+        "status": "extracted" if filled else "pending_review",
+        "source": source,
         "filename": file.filename,
         "size_bytes": len(raw),
-        "fields": {
-            "invoice_number": dict(empty),
-            "vendor_name": dict(empty),
-            "amount": dict(empty),
-            "tax_amount": dict(empty),
-            "invoice_date": dict(empty),
-            "due_date": dict(empty),
-            "department": dict(empty),
-        },
+        "fields": fields,
     }
 
 

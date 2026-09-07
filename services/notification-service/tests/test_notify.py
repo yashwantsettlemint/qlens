@@ -1,6 +1,14 @@
 """Runnable check:  python tests/test_notify.py"""
 
-from app.notify import LoggingNotifier, format_digest, get_notifier
+import os
+
+from app.notify import (
+    EmailNotifier,
+    LoggingNotifier,
+    SlackNotifier,
+    format_digest,
+    get_notifier,
+)
 
 ROWS = [
     {"invoice_number": "A/1", "due_date": "2026-01-01", "amount": "100000", "vendor": {"name": "Acme"}},
@@ -11,6 +19,19 @@ ROWS = [
 
 def run() -> None:
     assert isinstance(get_notifier(), LoggingNotifier)
+
+    # NOTIFY_CHANNEL selects the channel; unknown falls back to log
+    os.environ["NOTIFY_CHANNEL"] = "slack"
+    assert isinstance(get_notifier(), SlackNotifier)
+    os.environ["NOTIFY_CHANNEL"] = "email"
+    assert isinstance(get_notifier(), EmailNotifier)
+    os.environ["NOTIFY_CHANNEL"] = "carrier-pigeon"
+    assert isinstance(get_notifier(), LoggingNotifier)
+    del os.environ["NOTIFY_CHANNEL"]
+
+    # unconfigured Slack / email log a warning instead of raising
+    SlackNotifier(webhook_url="").send("s", "b")
+    EmailNotifier().send("s", "b")
 
     subject, body = format_digest(ROWS)
     assert "3 invoices flagged" in subject

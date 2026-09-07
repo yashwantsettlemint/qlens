@@ -17,6 +17,12 @@ export const dynamic = "force-dynamic";
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 const JWT_SECRET = process.env.HASURA_GRAPHQL_JWT_SECRET ?? "";
+// Off by default so the stack is demoable with no auth service. Set REQUIRE_AUTH=1
+// in any real deployment: then a missing/invalid token is rejected outright.
+const REQUIRE_AUTH = /^(1|true|yes)$/i.test(process.env.REQUIRE_AUTH ?? "");
+
+const unauthenticated = (message: string) =>
+  Response.json({ errors: [{ message, extensions: { code: "UNAUTHENTICATED" } }] });
 
 export async function POST(req: Request) {
   const { query, variables, operationName } = await req.json();
@@ -26,15 +32,11 @@ export async function POST(req: Request) {
   if (authz && authz.toLowerCase().startsWith("bearer ")) {
     claims = verifyHS256(authz.slice(7), JWT_SECRET);
     if (!claims) {
-      return Response.json({
-        errors: [
-          {
-            message: "Your session has expired or is invalid — sign in again.",
-            extensions: { code: "UNAUTHENTICATED" },
-          },
-        ],
-      });
+      return unauthenticated("Your session has expired or is invalid — sign in again.");
     }
+  }
+  if (REQUIRE_AUTH && !claims) {
+    return unauthenticated("Sign in to continue.");
   }
 
   const result = await requestContext.run({ claims }, () =>

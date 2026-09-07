@@ -51,6 +51,18 @@ interface RoleContextValue {
 
 const RoleContext = createContext<RoleContextValue | null>(null);
 
+/** exp (ms) from a JWT without verifying — just to time the refresh. */
+function expMs(token: string | null | undefined): number | null {
+  if (!token) return null;
+  try {
+    const seg = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const exp = JSON.parse(atob(seg)).exp;
+    return typeof exp === "number" ? exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
 function read(): Session | null {
   try {
     const raw = localStorage.getItem(KEY);
@@ -103,6 +115,42 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     (role: Role) => update({ user: `${role} (demo)`, role, token: null }),
     [update],
   );
+
+  // Silent refresh: swap in a fresh token ~5 min before the current one expires.
+  // A tab left closed past expiry can't refresh -> next API call 401s -> /login.
+  const refresh = useCallback(
+    async (token: string) => {
+      let res: Response;
+      try {
+        res = await fetch(`${AUTH_URL}/refresh`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}` },
+        });
+      } catch {
+        return; // offline — keep the token, the effect retries on the next change
+      }
+      if (!res.ok) {
+        update(null);
+        return;
+      }
+      const data = await res.json();
+      setSession((s) => {
+        const next = s ? { ...s, role: data.role as Role, token: data.access_token } : null;
+        write(next);
+        return next;
+      });
+    },
+    [update],
+  );
+
+  useEffect(() => {
+    const token = session?.token;
+    const exp = expMs(token);
+    if (!token || !exp) return;
+    const delay = Math.max(0, exp - Date.now() - 5 * 60_000);
+    const t = setTimeout(() => void refresh(token), delay);
+    return () => clearTimeout(t);
+  }, [session?.token, refresh]);
 
   const value = useMemo<RoleContextValue>(
     () => ({

@@ -9,6 +9,7 @@ dependencies = [
   "httpx>=0.27",
   "python-multipart>=0.0.12",
   "openai>=1.40",
+  "pypdf>=5.1",
   "invoice-tracker-shared-types",
 ]
 

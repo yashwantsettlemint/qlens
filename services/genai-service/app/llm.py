@@ -38,6 +38,50 @@ def _client():
     )
 
 
+_EXTRACT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "invoice_fields",
+        "description": "Structured fields read verbatim from an invoice document.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "invoice_number": {"type": "string"},
+                "vendor_name": {"type": "string"},
+                "amount": {"type": "number", "description": "net amount before tax"},
+                "tax_amount": {"type": "number", "description": "GST / total tax"},
+                "invoice_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "due_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "department": {"type": "string"},
+            },
+        },
+    },
+}
+
+
+def extract_invoice_fields(text: str) -> dict[str, dict] | None:
+    """LLM structured read of an invoice's text layer. Returns the {value,
+    confidence} field contract, or None (OFFLINE / empty / model declined) to
+    tell the caller to fall back to the offline regex."""
+    from .ocr import shape_llm_fields
+
+    if config.OFFLINE or not text.strip():
+        return None
+    resp = _client().chat.completions.create(
+        model=config.AZURE_OPENAI_DEPLOYMENT,
+        messages=[
+            {"role": "system", "content": "Extract invoice fields from the document text. "
+             "Use only what is present; omit any field you cannot read. Dates as YYYY-MM-DD."},
+            {"role": "user", "content": text[:12000]},
+        ],
+        tools=[_EXTRACT_TOOL],
+        tool_choice={"type": "function", "function": {"name": "invoice_fields"}},
+        temperature=0,
+    )
+    calls = resp.choices[0].message.tool_calls or []
+    return shape_llm_fields(calls[0].function.arguments) if calls else None
+
+
 def plan_query(question: str) -> dict | None:
     """LLM decides which whitelisted query answers the question. Returns tool args
     dict, or None to signal 'use the offline router'."""

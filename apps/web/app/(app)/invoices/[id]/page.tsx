@@ -54,6 +54,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
                 <>
                   <Button
                     variant="primary"
+                    data-testid="approve-invoice"
                     disabled={approvalState.loading}
                     onClick={() =>
                       setApproval({ variables: { id: inv.id, status: "APPROVED" } })
@@ -63,6 +64,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
                   </Button>
                   <Button
                     variant="danger"
+                    data-testid="reject-invoice"
                     disabled={approvalState.loading}
                     onClick={() => {
                       const note = window.prompt("Reason for rejection?") ?? undefined;

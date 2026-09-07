@@ -305,6 +305,9 @@ export const resolvers = {
     async approveInvoices(_: unknown, { ids }: { ids: string[] }) {
       requireRole("approver", "admin");
       const data = await hasura(
+        // admin: the frontend's approve writes invoices.approval_status directly,
+        // which Hasura's `approver` role isn't granted — the BFF gate above is
+        // the authority here.
         `mutation Approve($ids: [uuid!]!, $rows: [approvals_insert_input!]!) {
            update_invoices(where: { id: { _in: $ids }, approval_status: { _eq: "pending" } }, _set: { approval_status: "approved" }) {
              returning { ${INVOICE_SEL} }
@@ -318,6 +321,7 @@ export const resolvers = {
             acted_at: new Date().toISOString(),
           })),
         },
+        { admin: true },
       );
       return data.update_invoices.returning.map(mapInvoice);
     },
@@ -339,6 +343,7 @@ export const resolvers = {
           id, status: s,
           row: [{ invoice_id: id, approver: "you", level: 1, status: s, acted_at: new Date().toISOString(), }],
         },
+        { admin: true }, // writes invoices.approval_status — see approveInvoices
       );
       void note;
       return mapInvoice(data.update_invoices.returning[0]);
@@ -355,6 +360,7 @@ export const resolvers = {
            invoices_by_pk(id: $id) { ${INVOICE_SEL} }
          }`,
         { id: invoiceId, status },
+        { admin: true }, // duplicate_flags has no per-role update perm
       );
       return mapInvoice(data.invoices_by_pk);
     },
@@ -370,6 +376,7 @@ export const resolvers = {
            update_invoices(where: { id: { _eq: $id } }, _set: { payment_status: "paid" }) { affected_rows }
          }`,
         { p: { invoice_id: invoiceId, paid_at: paidAt, amount_paid: amountPaid }, id: invoiceId },
+        { admin: true }, // one atomic insert-payment + mark-paid; BFF-gated above
       );
       const p = data.insert_payments_one;
       return { id: p.id, paidAt: p.paid_at, amountPaid: num(p.amount_paid) };
@@ -380,6 +387,7 @@ export const resolvers = {
       const data = await hasura(
         `mutation Create($o: invoices_insert_input!) { insert_invoices_one(object: $o) { ${INVOICE_SEL} } }`,
         { o: toInsert(input) },
+        { admin: true },
       );
       return mapInvoice(data.insert_invoices_one);
     },
@@ -401,6 +409,7 @@ export const resolvers = {
         const data = await hasura(
           `mutation Import($o: [invoices_insert_input!]!) { insert_invoices(objects: $o) { affected_rows } }`,
           { o: valid },
+          { admin: true },
         );
         created = data.insert_invoices.affected_rows;
       }
