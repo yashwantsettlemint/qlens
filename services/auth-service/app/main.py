@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from shared_types.jwt import decode_hasura_jwt, mint_hasura_jwt
@@ -23,6 +24,13 @@ from .users import authenticate
 TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", "3600"))
 
 app = FastAPI(title="auth-service", version="0.1.0")
+# Called from the browser (login page). No cookies are used, so wildcard is fine for dev.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("AUTH_CORS_ORIGINS", "*").split(","),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class LoginRequest(BaseModel):
