@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/Button";
 import { ExposureBarChart } from "@/components/ExposureBarChart";
 import { pickInvoiceColumns } from "@/components/invoice/columns";
 import { inr, inrCompact } from "@/lib/format";
+import { useRole } from "@/lib/role";
 import type { InvoiceRow } from "@/lib/types";
 
 export default function DashboardPage() {
@@ -30,6 +31,7 @@ export default function DashboardPage() {
 function Dashboard() {
   const router = useRouter();
   const params = useSearchParams();
+  const { can } = useRole();
   const vendorId = params.get("vendor");
 
   const setVendor = (id: string | null) => {
@@ -117,6 +119,38 @@ function Dashboard() {
           </StatStrip>
         )}
       </QueryState>
+
+      {can("viewAdminStats") && s && (
+        <div className="mt-3">
+          <div className="mb-1.5 text-2xs font-medium uppercase tracking-wide text-ink-muted">
+            Admin
+          </div>
+          <StatStrip cols={4}>
+            <Stat
+              label="Approved, awaiting payment"
+              value={s.approvedUnpaidCount ?? 0}
+              hint={`${inr(s.approvedUnpaidAmount ?? 0)} to disburse`}
+            />
+            <Stat
+              label="Paid (last 30 days)"
+              rule="ok"
+              value={s.paidLast30Count ?? 0}
+              hint={inr(s.paidLast30Amount ?? 0)}
+            />
+            <Stat
+              label="Rejected"
+              rule={s.rejectedCount ? "warn" : "neutral"}
+              value={s.rejectedCount ?? 0}
+              hint="All time"
+            />
+            <Stat
+              label="Avg days to pay"
+              value={s.avgDaysToPay ?? 0}
+              hint="Invoice date → payment"
+            />
+          </StatStrip>
+        </div>
+      )}
 
       <Panel title="Vendor exposure" className="mt-6">
         <p className="mb-2 text-xs text-ink-muted">

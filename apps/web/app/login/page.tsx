@@ -14,7 +14,7 @@ const DEV_USERS = [
 ];
 
 export default function LoginPage() {
-  const { ready, session, login, loginOffline } = useRole();
+  const { ready, session, login, loginOffline, landingPath } = useRole();
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -22,17 +22,18 @@ export default function LoginPage() {
   const [offline, setOffline] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  // One redirect path: once a session exists, land on the role's home
+  // (dashboard for finance/admin, invoices for approver).
   useEffect(() => {
-    if (ready && session) router.replace("/");
-  }, [ready, session, router]);
+    if (ready && session) router.replace(landingPath);
+  }, [ready, session, landingPath, router]);
 
   async function submit(u: string, p: string) {
     setBusy(true);
     setError(null);
     const res = await login(u, p);
     setBusy(false);
-    if (res.ok) router.replace("/");
-    else {
+    if (!res.ok) {
       setError(res.error);
       setOffline(Boolean(res.offline));
     }
@@ -98,10 +99,7 @@ export default function LoginPage() {
           {offline && (
             <button
               type="button"
-              onClick={() => {
-                loginOffline("approver");
-                router.replace("/");
-              }}
+              onClick={() => loginOffline("approver")}
               className="mt-3 w-full rounded border border-warn-fg/40 bg-warn-bg px-3 py-1.5 text-xs text-warn-fg hover:bg-warn-bg/70"
             >
               Continue in demo mode as Approver (no backend)

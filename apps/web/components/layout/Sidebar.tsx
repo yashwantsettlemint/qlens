@@ -9,17 +9,26 @@ import {
   IconVendor,
   IconUpload,
 } from "@/components/ui/icons";
+import { useRole, type Capability } from "@/lib/role";
 import { RoleSwitcher } from "./RoleSwitcher";
 
-const NAV = [
-  { href: "/", label: "Dashboard", icon: IconDashboard, exact: true },
+const NAV: {
+  href: string;
+  label: string;
+  icon: typeof IconDashboard;
+  exact?: boolean;
+  cap?: Capability;
+}[] = [
+  { href: "/", label: "Dashboard", icon: IconDashboard, exact: true, cap: "viewDashboard" },
   { href: "/invoices", label: "Invoices", icon: IconInvoice },
   { href: "/vendors", label: "Vendors", icon: IconVendor },
-  { href: "/upload", label: "Upload", icon: IconUpload },
+  { href: "/upload", label: "Upload", icon: IconUpload, cap: "addInvoices" },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { can } = useRole();
+  const nav = NAV.filter((n) => !n.cap || can(n.cap));
   return (
     <nav className="flex w-[216px] shrink-0 flex-col border-r border-line bg-surface">
       <div className="px-4 py-4">
@@ -27,7 +36,7 @@ export function Sidebar() {
         <div className="text-2xs text-ink-muted">Invoice &amp; vendor payments</div>
       </div>
       <ul className="flex-1 px-2">
-        {NAV.map(({ href, label, icon: Icon, exact }) => {
+        {nav.map(({ href, label, icon: Icon, exact }) => {
           const active = exact ? pathname === href : pathname.startsWith(href);
           return (
             <li key={href}>

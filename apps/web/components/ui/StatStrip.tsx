@@ -5,9 +5,22 @@ import { toneRule, type Tone } from "@/lib/status";
  * A row of summary figures divided by hairlines — deliberately not a set of
  * shadowed cards. A stat carrying a warning gets a 2px status-coloured top rule.
  */
-export function StatStrip({ children }: { children: React.ReactNode }) {
+const COLS = { 2: "sm:grid-cols-2", 3: "sm:grid-cols-3", 4: "sm:grid-cols-4" } as const;
+
+export function StatStrip({
+  children,
+  cols = 3,
+}: {
+  children: React.ReactNode;
+  cols?: keyof typeof COLS;
+}) {
   return (
-    <div className="grid grid-cols-1 divide-y divide-line border border-line bg-surface sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+    <div
+      className={cn(
+        "grid grid-cols-1 divide-y divide-line border border-line bg-surface sm:divide-x sm:divide-y-0",
+        COLS[cols],
+      )}
+    >
       {children}
     </div>
   );

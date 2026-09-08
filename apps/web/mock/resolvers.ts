@@ -185,12 +185,38 @@ export const resolvers = {
         : db.invoices;
       const pending = rows.filter((i) => i.approvalStatus === "PENDING");
       const overdue = rows.filter((i) => effectivePaymentStatus(i) === "OVERDUE");
+      const gross = (i: InvoiceRow) => i.amount + i.taxAmount;
+
+      // ---- admin-only block ----
+      const approvedUnpaid = rows.filter(
+        (i) => i.approvalStatus === "APPROVED" && effectivePaymentStatus(i) !== "PAID",
+      );
+      const cutoff = new Date(TODAY.getTime() - 30 * 86_400_000).toISOString().slice(0, 10);
+      const recentPayments = db.payments.filter(
+        (p) => p.paidAt && p.paidAt >= cutoff && rows.some((r) => r.id === p.invoiceId),
+      );
+      const daysToPay = rows
+        .filter((i) => i.paymentStatus === "PAID")
+        .map((i) => {
+          const p = db.payments.find((x) => x.invoiceId === i.id && x.paidAt);
+          return p?.paidAt ? dayDiff(p.paidAt, i.invoiceDate) : null;
+        })
+        .filter((n): n is number => n != null && n >= 0);
+
       return {
         pendingCount: pending.length,
-        pendingAmount: round(pending.reduce((s, i) => s + i.amount + i.taxAmount, 0)),
+        pendingAmount: round(pending.reduce((s, i) => s + gross(i), 0)),
         overdueCount: overdue.length,
-        overdueAmount: round(overdue.reduce((s, i) => s + i.amount + i.taxAmount, 0)),
+        overdueAmount: round(overdue.reduce((s, i) => s + gross(i), 0)),
         vendorExposureTotal: round(rows.reduce((s, i) => s + grossOutstanding(i), 0)),
+        approvedUnpaidCount: approvedUnpaid.length,
+        approvedUnpaidAmount: round(approvedUnpaid.reduce((s, i) => s + gross(i), 0)),
+        paidLast30Count: recentPayments.length,
+        paidLast30Amount: round(recentPayments.reduce((s, p) => s + p.amountPaid, 0)),
+        rejectedCount: rows.filter((i) => i.approvalStatus === "REJECTED").length,
+        avgDaysToPay: daysToPay.length
+          ? Math.round((daysToPay.reduce((a, b) => a + b, 0) / daysToPay.length) * 10) / 10
+          : 0,
       };
     },
     invoices: (

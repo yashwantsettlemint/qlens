@@ -171,27 +171,57 @@ export const resolvers = {
   Query: {
     async dashboardStats(_: unknown, { vendorId }: { vendorId?: string | null }) {
       const scope = vendorId ? `vendor_id: { _eq: "${vendorId}" }` : "";
+      const s = scope ? `, ${scope}` : "";
       const today = iso(TODAY);
+      const cutoff = iso(new Date(TODAY.getTime() - 30 * 86_400_000));
+      const payScope = vendorId ? `, invoice: { vendor_id: { _eq: "${vendorId}" } }` : "";
       const data = await hasura(`
         query {
-          pending: invoices_aggregate(where: { approval_status: { _eq: "pending" } ${scope ? `, ${scope}` : ""} }) {
+          pending: invoices_aggregate(where: { approval_status: { _eq: "pending" } ${s} }) {
             aggregate { count sum { amount tax_amount } }
           }
-          overdue: invoices_aggregate(where: { payment_status: { _neq: "paid" }, due_date: { _lt: "${today}" } ${scope ? `, ${scope}` : ""} }) {
+          overdue: invoices_aggregate(where: { payment_status: { _neq: "paid" }, due_date: { _lt: "${today}" } ${s} }) {
             aggregate { count sum { amount tax_amount } }
           }
-          exposure: invoices_aggregate(where: { payment_status: { _neq: "paid" } ${scope ? `, ${scope}` : ""} }) {
+          exposure: invoices_aggregate(where: { payment_status: { _neq: "paid" } ${s} }) {
             aggregate { sum { amount tax_amount } }
+          }
+          approvedUnpaid: invoices_aggregate(where: { approval_status: { _eq: "approved" }, payment_status: { _neq: "paid" } ${s} }) {
+            aggregate { count sum { amount tax_amount } }
+          }
+          rejected: invoices_aggregate(where: { approval_status: { _eq: "rejected" } ${s} }) {
+            aggregate { count }
+          }
+          paidLast30: payments_aggregate(where: { paid_at: { _gte: "${cutoff}" } ${payScope} }) {
+            aggregate { count sum { amount_paid } }
+          }
+          # ponytail: in-resolver scan for avg days-to-pay, capped at 500 paid invoices
+          paidInvoices: invoices(where: { payment_status: { _eq: "paid" } ${s} }, limit: 500) {
+            invoice_date payments(order_by: { paid_at: asc_nulls_last }, limit: 1) { paid_at }
           }
         }
       `);
       const sum = (a: any) => num(a?.sum?.amount) + num(a?.sum?.tax_amount);
+      const daysToPay = (data.paidInvoices ?? [])
+        .map((i: any) => {
+          const p = i.payments?.[0]?.paid_at;
+          return p ? dayDiff(p, i.invoice_date) : null;
+        })
+        .filter((n: number | null): n is number => n != null && n >= 0);
       return {
         pendingCount: data.pending.aggregate.count,
         pendingAmount: round(sum(data.pending.aggregate)),
         overdueCount: data.overdue.aggregate.count,
         overdueAmount: round(sum(data.overdue.aggregate)),
         vendorExposureTotal: round(sum(data.exposure.aggregate)),
+        approvedUnpaidCount: data.approvedUnpaid.aggregate.count,
+        approvedUnpaidAmount: round(sum(data.approvedUnpaid.aggregate)),
+        paidLast30Count: data.paidLast30.aggregate.count,
+        paidLast30Amount: round(num(data.paidLast30.aggregate?.sum?.amount_paid)),
+        rejectedCount: data.rejected.aggregate.count,
+        avgDaysToPay: daysToPay.length
+          ? Math.round((daysToPay.reduce((a: number, b: number) => a + b, 0) / daysToPay.length) * 10) / 10
+          : 0,
       };
     },
 

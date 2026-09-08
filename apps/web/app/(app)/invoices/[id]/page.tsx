@@ -130,6 +130,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
                 total={inv.amount + inv.taxAmount}
                 paymentStatus={inv.paymentStatus}
                 payments={inv.payments}
+                canRecord={can("recordPayment")}
               />
             </div>
           </div>

@@ -16,11 +16,14 @@ export function PaymentPanel({
   total,
   paymentStatus,
   payments,
+  canRecord,
 }: {
   invoiceId: string;
   total: number;
   paymentStatus: string;
   payments: InvoiceDetail["payments"];
+  /** false for roles that can't mark invoices paid (approver) — history only. */
+  canRecord: boolean;
 }) {
   const [paidAt, setPaidAt] = useState(TODAY);
   const [amount, setAmount] = useState(String(total));
@@ -48,6 +51,10 @@ export function PaymentPanel({
 
       {settled ? (
         <p className="text-sm text-ok-fg">Settled.</p>
+      ) : !canRecord ? (
+        <p className="text-sm text-ink-muted">
+          {payments.length ? "Partially paid — awaiting settlement." : "Not yet paid."}
+        </p>
       ) : (
         <form
           className="flex flex-wrap items-end gap-3"

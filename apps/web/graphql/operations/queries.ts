@@ -8,6 +8,12 @@ export const DashboardStatsQuery = graphql(`
       overdueCount
       overdueAmount
       vendorExposureTotal
+      approvedUnpaidCount
+      approvedUnpaidAmount
+      paidLast30Count
+      paidLast30Amount
+      rejectedCount
+      avgDaysToPay
     }
   }
 `);

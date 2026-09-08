@@ -26,7 +26,28 @@ export const ROLES: { value: Role; label: string }[] = [
 const AUTH_URL = process.env.NEXT_PUBLIC_AUTH_URL ?? "http://localhost:8095";
 const KEY = "it.session";
 
-type Capability = "approve" | "manageVendors";
+/**
+ * What each role can do. The BFF enforces the same split server-side on every
+ * mutation (apps/web/server/auth.ts); this is the UI half — which pages and
+ * controls to show.
+ *
+ *   finance_user  dashboard + record payments + add/import invoices
+ *   approver      approve / reject only (no dashboard, no payments, no upload)
+ *   admin         everything, plus the admin-only stats block
+ */
+export type Capability =
+  | "viewDashboard"
+  | "approve"
+  | "recordPayment"
+  | "addInvoices"
+  | "viewAdminStats";
+
+const ROLE_CAPS: Record<Role, Capability[]> = {
+  finance_user: ["viewDashboard", "recordPayment", "addInvoices"],
+  approver: ["approve"],
+  admin: ["viewDashboard", "approve", "recordPayment", "addInvoices", "viewAdminStats"],
+  genai_readonly: [],
+};
 
 export interface Session {
   user: string;
@@ -40,6 +61,8 @@ interface RoleContextValue {
   user: string | null;
   role: Role | null;
   can: (c: Capability) => boolean;
+  /** Where this role should land after login (approver has no dashboard). */
+  landingPath: string;
   setRole: (r: Role) => void;
   login: (
     username: string,
@@ -160,11 +183,12 @@ export function RoleProvider({ children }: { children: ReactNode }) {
       role: session?.role ?? null,
       can: (c) => {
         const role = session?.role;
-        if (!role) return false;
-        if (c === "approve") return role === "approver" || role === "admin";
-        if (c === "manageVendors") return role === "admin";
-        return false;
+        return role ? ROLE_CAPS[role].includes(c) : false;
       },
+      landingPath:
+        session?.role && ROLE_CAPS[session.role].includes("viewDashboard")
+          ? "/"
+          : "/invoices",
       setRole: (r) => session && update({ ...session, role: r }),
       login,
       loginOffline,

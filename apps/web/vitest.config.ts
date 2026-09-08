@@ -8,6 +8,6 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["{lib,server}/**/*.test.ts"],
+    include: ["{lib,server,mock}/**/*.test.ts"],
   },
 });

@@ -97,6 +97,13 @@ type DashboardStats {
   overdueCount: Int!
   overdueAmount: Float!
   vendorExposureTotal: Float!
+  # Admin-only block (nullable — only requested when the viewer is admin).
+  approvedUnpaidCount: Int
+  approvedUnpaidAmount: Float
+  paidLast30Count: Int
+  paidLast30Amount: Float
+  rejectedCount: Int
+  avgDaysToPay: Float
 }
 
 type VendorStats {
