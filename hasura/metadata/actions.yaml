@@ -5,6 +5,9 @@ actions:
       handler: "{{ML_SERVICE_URL}}/check-duplicate"
       timeout: 15
       forward_client_headers: true
+      headers:
+        - name: X-Internal-Token
+          value_from_env: INTERNAL_SERVICE_TOKEN
     permissions:
       - role: finance_user
       - role: admin

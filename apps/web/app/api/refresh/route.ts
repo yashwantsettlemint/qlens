@@ -5,7 +5,7 @@ import { SESSION_COOKIE } from "@/server/auth";
 const AUTH_URL = process.env.NEXT_PUBLIC_AUTH_URL ?? "http://localhost:8095";
 
 export async function POST() {
-  const token = cookies().get(SESSION_COOKIE)?.value;
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return NextResponse.json({ session: null }, { status: 401 });
 
   let res: Response;

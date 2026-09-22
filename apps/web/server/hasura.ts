@@ -46,3 +46,11 @@ export async function hasura<T = any>(
 export const GENAI_URL = process.env.GENAI_SERVICE_URL ?? "http://localhost:8093";
 export const ML_SERVICE_URL = process.env.ML_SERVICE_URL ?? "http://localhost:8092";
 export const NOTIFICATION_URL = process.env.NOTIFICATION_SERVICE_URL ?? "http://localhost:8094";
+
+// Sent on every server-to-server call to ingestion/ml/genai/notification/ocr —
+// those services trust the network boundary in dev, but require this shared
+// secret in prod (see shared_types.auth.require_internal_token).
+const INTERNAL_SERVICE_TOKEN = process.env.INTERNAL_SERVICE_TOKEN ?? "";
+export function internalServiceHeaders(): Record<string, string> {
+  return INTERNAL_SERVICE_TOKEN ? { "X-Internal-Token": INTERNAL_SERVICE_TOKEN } : {};
+}

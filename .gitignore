@@ -17,6 +17,7 @@ services/ml-service/models/*.pkl
 .env
 .env.local
 infra/.env
+infra/k8s/secrets.yaml
 
 .DS_Store
 

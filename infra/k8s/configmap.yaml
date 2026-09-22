@@ -1,0 +1,32 @@
+# Non-secret config. Credentials (DB URLs, admin/JWT/rabbitmq secrets, the
+# internal service token, LLM/Razorpay keys) live in secrets.example.yaml
+# instead — copy that to secrets.yaml with real values, never commit it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: invoice-tracker-config
+  namespace: invoice-tracker
+data:
+  HASURA_ENDPOINT: "http://hasura:8080/v1/graphql"
+  HASURA_GRAPHQL_ENABLE_CONSOLE: "false"
+  HASURA_GRAPHQL_DEV_MODE: "false"
+  HASURA_GRAPHQL_ENABLED_LOG_TYPES: "startup,http-log"
+
+  ML_SERVICE_URL: "http://ml-service:8002"
+  ML_SERVICE_SCORE_URL: "http://ml-service:8002/score"
+  GENAI_SERVICE_URL: "http://genai-service:8003"
+  NOTIFICATION_SERVICE_URL: "http://notification-service:8004"
+  OCR_SERVICE_URL: "http://ocr-service:8006"
+
+  EMBEDDING_MODEL: "all-MiniLM-L6-v2"
+  HF_HUB_OFFLINE: "1"
+  NOTIFY_CHANNEL: "log" # switch to slack/email — see infra/.env.example for the extra vars each needs
+  AUTH_TOKEN_TTL_SECONDS: "3600"
+
+  # web BFF
+  REQUIRE_AUTH: "1"
+  NEXT_PUBLIC_AUTH_URL: "http://auth-service:8005"
+
+  # Set to your real origin(s) once you have a domain — empty denies all
+  # cross-origin browser calls to auth-service.
+  AUTH_CORS_ORIGINS: "https://your-domain.example"

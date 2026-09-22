@@ -9,7 +9,7 @@ import { SESSION_COOKIE } from "@/server/auth";
 const AUTH_URL = process.env.NEXT_PUBLIC_AUTH_URL ?? "http://localhost:8095";
 
 export async function POST(req: Request) {
-  const token = cookies().get(SESSION_COOKIE)?.value;
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return Response.json({ error: "Sign in as admin to invite teammates." }, { status: 401 });
 
   const { email, role } = await req.json();

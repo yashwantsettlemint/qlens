@@ -27,6 +27,8 @@ from shared_types.jwt import decode_hasura_jwt, mint_hasura_jwt
 
 from .email import send_invite_email
 from .users import (
+    LOCKOUT_MINUTES,
+    AccountLocked,
     User,
     accept_invite,
     authenticate,
@@ -49,10 +51,12 @@ TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", "3600"))
 _HASURA_ROLE = {"admin": "company_admin"}
 
 app = FastAPI(title="auth-service", version="0.2.0")
-# Called from the browser (login page). No cookies are used, so wildcard is fine for dev.
+# Called from the browser (login page). Deny-by-default: an unset
+# AUTH_CORS_ORIGINS in prod fails closed instead of falling back to "*".
+_cors_origins = [o for o in os.getenv("AUTH_CORS_ORIGINS", "").split(",") if o]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("AUTH_CORS_ORIGINS", "*").split(","),
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -139,7 +143,10 @@ def register(req: RegisterRequest) -> TokenResponse:
 
 @app.post("/login", response_model=TokenResponse)
 def login(req: LoginRequest) -> TokenResponse:
-    user = authenticate(req.username, req.password)
+    try:
+        user = authenticate(req.username, req.password)
+    except AccountLocked:
+        raise HTTPException(429, f"too many failed attempts — try again in {LOCKOUT_MINUTES} minutes")
     if user is None:
         raise HTTPException(401, "invalid username or password")
     return _mint(user)

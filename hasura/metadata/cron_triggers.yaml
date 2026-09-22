@@ -3,6 +3,9 @@
   schedule: "0 2 * * *"
   include_in_metadata: true
   payload: {}
+  headers:
+    - name: X-Internal-Token
+      value_from_env: INTERNAL_SERVICE_TOKEN
   retry_conf:
     num_retries: 2
     retry_interval_seconds: 60
@@ -15,6 +18,9 @@
   schedule: "0 3 * * *"
   include_in_metadata: true
   payload: {}
+  headers:
+    - name: X-Internal-Token
+      value_from_env: INTERNAL_SERVICE_TOKEN
   retry_conf:
     num_retries: 2
     retry_interval_seconds: 60

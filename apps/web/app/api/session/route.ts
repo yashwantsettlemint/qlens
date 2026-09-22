@@ -7,7 +7,7 @@ import { verifyHS256 } from "@/server/jwt";
 const JWT_SECRET = process.env.HASURA_GRAPHQL_JWT_SECRET ?? "";
 
 export async function GET() {
-  const token = cookies().get(SESSION_COOKIE)?.value;
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return NextResponse.json({ session: null });
 
   const claims = verifyHS256(token, JWT_SECRET);

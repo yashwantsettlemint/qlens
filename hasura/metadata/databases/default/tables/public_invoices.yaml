@@ -93,6 +93,70 @@ select_permissions:
     permission:
       columns: "*"
       filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: ml_service
+    permission:
+      columns:
+        - id
+        - invoice_number
+        - amount
+        - tax_amount
+        - po_id
+        - invoice_date
+        - due_date
+        - department
+        - vendor_id
+        - customer_id
+        - payment_status
+        - direction
+        - company_id
+        - created_at
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: ocr_service
+    permission:
+      columns:
+        - id
+        - invoice_number
+        - invoice_date
+        - created_at
+        - amount
+        - tax_amount
+        - company_id
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: notifier
+    # Cross-tenant by design — the daily overdue sweep runs across every
+    # company, so this can't be company-scoped like the other roles. Narrowed
+    # to only the columns the sweep actually reads to compensate.
+    permission:
+      columns:
+        - id
+        - invoice_number
+        - due_date
+        - amount
+        - department
+        - direction
+        - payment_status
+      filter: {}
+  - role: genai_writer
+    # Cross-tenant like `notifier`, for the same structural reason: /embed's
+    # per-invoice read and /embed/backfill's id sweep both run before the
+    # invoice's own company_id is known (that's part of what they're reading).
+    # Columns capped to exactly what services/genai-service/app/hasura.py's
+    # _INVOICE_FULL query uses.
+    permission:
+      columns:
+        - id
+        - company_id
+        - invoice_number
+        - amount
+        - tax_amount
+        - department
+        - invoice_date
+        - due_date
+        - approval_status
+        - payment_status
+        - description
+        - extracted_text
+      filter: {}
 update_permissions:
   - role: finance_user
     permission:
@@ -113,6 +177,12 @@ update_permissions:
         - source
         - created_by
       filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      check: {}
+  - role: notifier
+    permission:
+      columns:
+        - payment_status
+      filter: {}
       check: {}
 event_triggers:
   - name: invoice_ml_score
@@ -142,6 +212,8 @@ event_triggers:
     headers:
       - name: x-service-source
         value: hasura-event-trigger
+      - name: X-Internal-Token
+        value_from_env: INTERNAL_SERVICE_TOKEN
   - name: invoice_embed
     definition:
       enable_manual: true
@@ -166,3 +238,5 @@ event_triggers:
     headers:
       - name: x-service-source
         value: hasura-event-trigger
+      - name: X-Internal-Token
+        value_from_env: INTERNAL_SERVICE_TOKEN

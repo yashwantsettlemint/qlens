@@ -1,0 +1,29 @@
+# The only public entry point — routes to `web` only. Every other service
+# stays ClusterIP-only (see services.yaml), unreachable from outside the
+# cluster regardless of app-level auth.
+#
+# Requires ingress-nginx and cert-manager installed on the cluster, and a
+# ClusterIssuer named letsencrypt-prod (cert-manager docs: https://cert-manager.io/docs/configuration/acme/).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: invoice-tracker
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "25m" # bulk OCR uploads
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["your-domain.example"]
+      secretName: web-tls
+  rules:
+    - host: your-domain.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port: { number: 3000 }

@@ -8,11 +8,10 @@ HASURA_ENDPOINT = (
     or os.getenv("HASURA_GRAPHQL_ENDPOINT")
     or "http://localhost:8088/v1/graphql"
 )
-HASURA_ADMIN_SECRET = (
-    os.getenv("HASURA_ADMIN_SECRET")
-    or os.getenv("HASURA_GRAPHQL_ADMIN_SECRET")
-    or "devsecret"
-)
+# ml-service mints its own scoped JWT for every Hasura call (see app/hasura.py)
+# instead of the admin secret — see hasura/metadata's ml_service role.
+ML_ROLE = "ml_service"
+ML_USER_ID = "ml-service"
 
 _ROOT = Path(__file__).resolve().parent.parent
 # The flat path is the shared bootstrap model, trained on synthetic data at

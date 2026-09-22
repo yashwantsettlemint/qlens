@@ -29,3 +29,18 @@ select_permissions:
     permission:
       columns: "*"
       filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: genai_writer
+    # Needed for the `customer { name }` relationship under invoices in
+    # _INVOICE_FULL — cross-tenant, same as genai_writer's invoices grant.
+    permission:
+      columns:
+        - name
+      filter: {}
+  - role: ml_service
+    # No customer columns are actually read — just needed to expose the
+    # `customer { invoices {...} }` relationship traversal in ml/train.py's
+    # payment-history query.
+    permission:
+      columns:
+        - id
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }

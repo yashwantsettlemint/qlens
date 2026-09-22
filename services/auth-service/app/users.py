@@ -17,6 +17,15 @@ from .db import get_conn
 
 _ALLOWED_ROLES = {"finance_user", "approver", "admin"}
 INVITE_TTL_DAYS = 7
+MIN_PASSWORD_LENGTH = 8
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
+
+
+class AccountLocked(Exception):
+    """Raised by authenticate() instead of returning None, so /login can
+    tell a locked-out account (fine to reveal, standard UX) apart from a
+    plain wrong password (deliberately not distinguished — see below)."""
 
 
 @dataclass(frozen=True)
@@ -64,14 +73,41 @@ def authenticate(identifier: str, password: str) -> User | None:
     so an identifier that collides across two companies resolves to whichever
     account was created first (ponytail: fine for now, ask for email if a
     customer ever hits this). A deactivated account fails the same as a wrong
-    password — no separate error, nothing to distinguish for an attacker."""
+    password — no separate error, nothing to distinguish for an attacker.
+
+    Failed logins are tracked per-account; MAX_FAILED_ATTEMPTS in a row locks
+    it for LOCKOUT_MINUTES (raises AccountLocked, distinct from a plain wrong
+    password returning None)."""
     with get_conn() as conn:
         row = conn.execute(
             "SELECT * FROM users WHERE (email = %s OR username = %s) AND is_active ORDER BY created_at LIMIT 1",
             (identifier, identifier),
         ).fetchone()
-    if row is None or not _verify(password, row["password_hash"]):
-        return None
+        if row is None:
+            return None
+
+        locked_until = row["locked_until"]
+        if locked_until is not None and locked_until > datetime.now(timezone.utc):
+            raise AccountLocked()
+
+        if not _verify(password, row["password_hash"]):
+            failed = row["failed_login_count"] + 1
+            new_locked_until = (
+                datetime.now(timezone.utc) + timedelta(minutes=LOCKOUT_MINUTES)
+                if failed >= MAX_FAILED_ATTEMPTS
+                else None
+            )
+            conn.execute(
+                "UPDATE users SET failed_login_count = %s, locked_until = %s WHERE id = %s",
+                (failed, new_locked_until, row["id"]),
+            )
+            return None
+
+        if row["failed_login_count"] or row["locked_until"] is not None:
+            conn.execute(
+                "UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE id = %s",
+                (row["id"],),
+            )
     return _row_to_user(row)
 
 
@@ -103,8 +139,8 @@ def create_user(company_id: str, username: str, password: str, role: str, email:
     normalized_email = (email or "").strip().lower()
     if not normalized_username:
         raise ValueError("username is required")
-    if not password:
-        raise ValueError("password is required")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"password must be at least {MIN_PASSWORD_LENGTH} characters")
     if role not in _ALLOWED_ROLES:
         raise ValueError(f"unsupported role: {role}")
     if not normalized_email or "@" not in normalized_email:

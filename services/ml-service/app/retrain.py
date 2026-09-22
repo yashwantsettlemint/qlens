@@ -59,14 +59,14 @@ async def retrain_model(model_name: str, triggered_by: str, company_id: str) -> 
             "status": "skipped_insufficient_data",
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "error": str(exc),
-        })
+        }, company_id)
         return {"status": "skipped_insufficient_data", "detail": str(exc), "event_id": event_id}
     except Exception as exc:
         await hasura.update_retrain_event(event_id, {
             "status": "failed",
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "error": str(exc),
-        })
+        }, company_id)
         raise
 
     # lru_cache has no per-key eviction — clears every company's cached model,
@@ -79,5 +79,5 @@ async def retrain_model(model_name: str, triggered_by: str, company_id: str) -> 
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "new_version": result["version"],
         "new_metrics": result["metrics"],
-    })
+    }, company_id)
     return {"status": "succeeded", "event_id": event_id, **result}

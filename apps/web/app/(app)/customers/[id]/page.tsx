@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, use } from "react";
 import { useMutation, useQuery } from "@apollo/client";
 import { CustomerDetailQuery, InvoicesQuery } from "@/graphql/operations/queries";
 import { UpdateCustomerEmailMutation, UpdateCustomerTaxDetailsMutation } from "@/graphql/operations/mutations";
@@ -145,7 +145,8 @@ function CustomerTaxPanel({
   );
 }
 
-export default function CustomerDetailPage({ params }: { params: { id: string } }) {
+export default function CustomerDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const customer = useQuery(CustomerDetailQuery, { variables: { id: params.id } });
   const history = useQuery(InvoicesQuery, {
     variables: {

@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from shared_types.auth import require_internal_token
 
 from . import bulk, config, ocr_engine, pipeline
 
@@ -40,7 +41,7 @@ def health() -> dict:
     }
 
 
-@app.post("/bulk/enqueue")
+@app.post("/bulk/enqueue", dependencies=[Depends(require_internal_token)])
 async def bulk_enqueue(files: list[UploadFile] = File(...), company_id: str = Form(...)) -> list[dict]:
     jobs = []
     for f in files:
@@ -54,12 +55,12 @@ async def bulk_enqueue(files: list[UploadFile] = File(...), company_id: str = Fo
     return jobs
 
 
-@app.get("/bulk/status")
+@app.get("/bulk/status", dependencies=[Depends(require_internal_token)])
 async def bulk_status(ids: str) -> list[dict]:
     return [j for j in (bulk.job_status(i) for i in ids.split(",") if i) if j]
 
 
-@app.post("/extract-text")
+@app.post("/extract-text", dependencies=[Depends(require_internal_token)])
 async def extract_text_endpoint(file: UploadFile = File(...)) -> dict:
     """Raw text only — text layer for digital PDFs, OCR for scans/images. No field
     extraction, no validation, no review queue."""
@@ -78,7 +79,7 @@ async def extract_text_endpoint(file: UploadFile = File(...)) -> dict:
     }
 
 
-@app.post("/extract")
+@app.post("/extract", dependencies=[Depends(require_internal_token)])
 async def extract_endpoint(file: UploadFile = File(...), company_id: str = Form(...)) -> dict:
     raw = await file.read()
     if not raw:

@@ -24,11 +24,11 @@ interface Bucket {
  * already model-driven (each invoice lands by due date + predicted delay where
  * scored), so this is the "prediction graph" view of cashForecast. */
 export function ForecastChart({ buckets }: { buckets: Bucket[] }) {
-  let running = 0;
-  const data = buckets.map((b) => {
-    running += b.net;
-    return { ...b, cumulative: running };
-  });
+  const data = buckets.reduce<(Bucket & { cumulative: number })[]>((acc, b) => {
+    const running = (acc.at(-1)?.cumulative ?? 0) + b.net;
+    acc.push({ ...b, cumulative: running });
+    return acc;
+  }, []);
 
   return (
     <div style={{ width: "100%", height: 280 }}>

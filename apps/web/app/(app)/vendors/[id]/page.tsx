@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, use } from "react";
 import { useMutation, useQuery } from "@apollo/client";
 import {
   VendorDetailQuery,
@@ -91,7 +91,8 @@ const HISTORY_COLUMNS = [
   "payment",
 ];
 
-export default function VendorDetailPage({ params }: { params: { id: string } }) {
+export default function VendorDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const vendor = useQuery(VendorDetailQuery, { variables: { id: params.id } });
   const stats = useQuery(DashboardStatsQuery, { variables: { vendorId: params.id } });
   const history = useQuery(InvoicesQuery, {

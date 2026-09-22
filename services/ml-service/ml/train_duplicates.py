@@ -71,7 +71,7 @@ async def _load_from_hasura(company_id: str) -> pd.DataFrame:
       }
     }
     """
-    data = await _gql(query, {"companyId": company_id})
+    data = await _gql(query, {"companyId": company_id}, company_id)
     records = []
     for row in data["duplicate_flags"]:
         a, b = row.get("invoice"), row.get("matchedInvoice")

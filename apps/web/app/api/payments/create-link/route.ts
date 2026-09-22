@@ -22,7 +22,7 @@ const fail = (status: number, message: string) => Response.json({ error: message
 
 export async function POST(req: Request) {
   let claims: Claims | null = null;
-  const token = cookies().get(SESSION_COOKIE)?.value;
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (token) {
     claims = verifyHS256(token, JWT_SECRET);
     if (!claims) return fail(401, "Your session has expired — sign in again.");
@@ -76,7 +76,7 @@ export async function POST(req: Request) {
   if (inv.payment_status === "paid") return fail(400, "This invoice is already paid.");
 
   const amountPaise = Math.round((Number(inv.amount) + Number(inv.tax_amount)) * 100);
-  const origin = headers().get("origin") ?? "";
+  const origin = (await headers()).get("origin") ?? "";
 
   let resp: Response;
   try {

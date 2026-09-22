@@ -5,11 +5,10 @@ HASURA_ENDPOINT = (
     or os.getenv("HASURA_GRAPHQL_ENDPOINT")
     or "http://localhost:8088/v1/graphql"
 )
-HASURA_ADMIN_SECRET = (
-    os.getenv("HASURA_ADMIN_SECRET")
-    or os.getenv("HASURA_GRAPHQL_ADMIN_SECRET")
-    or "devsecret"
-)
+# ocr-service mints its own scoped JWT for every Hasura call (see app/hasura.py)
+# instead of the admin secret — see hasura/metadata's ocr_service role.
+OCR_ROLE = "ocr_service"
+OCR_USER_ID = "ocr-service"
 
 # --- LLM field extraction (optional; regex fallback when unset) ---
 # LLM — any OpenAI-compatible endpoint (Groq, OpenAI, Ollama, …) or Azure OpenAI.

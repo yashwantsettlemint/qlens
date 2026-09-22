@@ -4,7 +4,7 @@
  * values are translated here so no component, operation, or codegen output has
  * to change. This is the Hasura-backed sibling of mock/resolvers.ts.
  */
-import { hasura, GENAI_URL, ML_SERVICE_URL, NOTIFICATION_URL } from "./hasura";
+import { hasura, GENAI_URL, ML_SERVICE_URL, NOTIFICATION_URL, internalServiceHeaders } from "./hasura";
 import { safeImageSrc } from "../lib/pdf/render";
 import { requireRole, myCompanyId } from "./auth";
 import { validateInvoiceInput } from "../lib/validateInvoice";
@@ -574,7 +574,7 @@ export const resolvers = {
     async invoiceSummary(_: unknown, { id }: { id: string }) {
       const r = await fetch(`${GENAI_URL}/summarize-invoice`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...internalServiceHeaders() },
         body: JSON.stringify({ invoice_id: id, company_id: requireCompanyId() }),
       });
       if (!r.ok) throw new Error(`genai-service /summarize-invoice returned ${r.status}`);
@@ -780,7 +780,7 @@ export const resolvers = {
       try {
         const r = await fetch(`${GENAI_URL}/query`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", ...internalServiceHeaders() },
           body: JSON.stringify({ question: prompt, company_id: requireCompanyId() }),
         });
         const j = await r.json();
@@ -812,7 +812,9 @@ export const resolvers = {
 
     async mlModelStatus() {
       requireRole("admin");
-      const res = await fetch(`${ML_SERVICE_URL}/models?company_id=${requireCompanyId()}`);
+      const res = await fetch(`${ML_SERVICE_URL}/models?company_id=${requireCompanyId()}`, {
+        headers: internalServiceHeaders(),
+      });
       if (!res.ok) throw new Error(`ml-service /models returned ${res.status}`);
       const data = await res.json();
       return { duplicate: mapMlModel(data.duplicate), delay: mapMlModel(data.delay) };
@@ -820,7 +822,9 @@ export const resolvers = {
 
     async mlDriftStatus() {
       requireRole("admin");
-      const res = await fetch(`${ML_SERVICE_URL}/drift?company_id=${requireCompanyId()}`);
+      const res = await fetch(`${ML_SERVICE_URL}/drift?company_id=${requireCompanyId()}`, {
+        headers: internalServiceHeaders(),
+      });
       if (!res.ok) throw new Error(`ml-service /drift returned ${res.status}`);
       const data = await res.json();
       return [data.duplicate, data.delay].filter(Boolean).map(mapMlDriftReport);
@@ -830,6 +834,7 @@ export const resolvers = {
       requireRole("admin");
       const res = await fetch(
         `${ML_SERVICE_URL}/retrain-history?limit=${limit ?? 20}&company_id=${requireCompanyId()}`,
+        { headers: internalServiceHeaders() },
       );
       if (!res.ok) throw new Error(`ml-service /retrain-history returned ${res.status}`);
       const data = await res.json();
@@ -995,7 +1000,7 @@ export const resolvers = {
       if (isReceivable && customer?.email) {
         fetch(`${NOTIFICATION_URL}/notify/payment-received`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", ...internalServiceHeaders() },
           body: JSON.stringify({
             customer_email: customer.email,
             customer_name: customer.name,
@@ -1139,7 +1144,7 @@ export const resolvers = {
             const timer = setTimeout(() => controller.abort(), 5000);
             const res = await fetch(`${NOTIFICATION_URL}/notify/send-invoice`, {
               method: "POST",
-              headers: { "content-type": "application/json" },
+              headers: { "content-type": "application/json", ...internalServiceHeaders() },
               body: JSON.stringify({
                 customer_email: customer.email,
                 customer_name: customer.name,
@@ -1248,7 +1253,7 @@ export const resolvers = {
       try {
         res = await fetch(`${NOTIFICATION_URL}/notify/send-invoice`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", ...internalServiceHeaders() },
           body: JSON.stringify({
             customer_email: invoice.customer.email,
             customer_name: invoice.customer.name,
@@ -1520,7 +1525,7 @@ export const resolvers = {
       const companyId = requireCompanyId();
       const res = await fetch(`${ML_SERVICE_URL}/drift/check`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...internalServiceHeaders() },
         body: JSON.stringify({ company_id: companyId }),
       });
       if (!res.ok) throw new Error(`ml-service /drift/check returned ${res.status}`);
@@ -1533,12 +1538,14 @@ export const resolvers = {
       const companyId = requireCompanyId();
       const res = await fetch(`${ML_SERVICE_URL}/retrain`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...internalServiceHeaders() },
         body: JSON.stringify({ model_name: modelName, company_id: companyId }),
       });
       if (!res.ok) throw new Error(`ml-service /retrain returned ${res.status}`);
       const result = await res.json();
-      const history = await fetch(`${ML_SERVICE_URL}/retrain-history?limit=1&company_id=${companyId}`);
+      const history = await fetch(`${ML_SERVICE_URL}/retrain-history?limit=1&company_id=${companyId}`, {
+        headers: internalServiceHeaders(),
+      });
       const [latest] = await history.json();
       return latest
         ? mapMlRetrainEvent(latest)

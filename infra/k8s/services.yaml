@@ -1,0 +1,216 @@
+# App services: ingestion, ml, genai, notification, auth, ocr (all internal —
+# no Ingress) and web (the only one with public Ingress, see ingress.yaml).
+#
+# Image refs use ${REGISTRY}/<name>:${TAG} placeholders — substitute before
+# applying, e.g.:
+#   REGISTRY=ghcr.io/you TAG=$(git rev-parse --short HEAD) \
+#     envsubst < infra/k8s/services.yaml | kubectl apply -f -
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingestion-service
+  namespace: invoice-tracker
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ingestion-service } }
+  template:
+    metadata: { labels: { app: ingestion-service } }
+    spec:
+      containers:
+        - name: ingestion-service
+          image: ${REGISTRY}/ingestion-service:${TAG}
+          ports: [{ containerPort: 8001 }]
+          envFrom:
+            - configMapRef: { name: invoice-tracker-config }
+            - secretRef: { name: invoice-tracker-secrets }
+          readinessProbe: { httpGet: { path: /health, port: 8001 }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /health, port: 8001 }, periodSeconds: 30 }
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: 500m, memory: 512Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: ingestion-service, namespace: invoice-tracker }
+spec:
+  selector: { app: ingestion-service }
+  ports: [{ port: 8001, targetPort: 8001 }]
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-service
+  namespace: invoice-tracker
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ml-service } }
+  template:
+    metadata: { labels: { app: ml-service } }
+    spec:
+      containers:
+        - name: ml-service
+          image: ${REGISTRY}/ml-service:${TAG}
+          ports: [{ containerPort: 8002 }]
+          envFrom:
+            - configMapRef: { name: invoice-tracker-config }
+            - secretRef: { name: invoice-tracker-secrets }
+          readinessProbe: { httpGet: { path: /health, port: 8002 }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /health, port: 8002 }, periodSeconds: 30 }
+          resources: { requests: { cpu: 200m, memory: 512Mi }, limits: { cpu: "1", memory: 1Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: ml-service, namespace: invoice-tracker }
+spec:
+  selector: { app: ml-service }
+  ports: [{ port: 8002, targetPort: 8002 }]
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: genai-service
+  namespace: invoice-tracker
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: genai-service } }
+  template:
+    metadata: { labels: { app: genai-service } }
+    spec:
+      containers:
+        - name: genai-service
+          image: ${REGISTRY}/genai-service:${TAG}
+          ports: [{ containerPort: 8003 }]
+          envFrom:
+            - configMapRef: { name: invoice-tracker-config }
+            - secretRef: { name: invoice-tracker-secrets }
+          readinessProbe: { httpGet: { path: /health, port: 8003 }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /health, port: 8003 }, periodSeconds: 30 }
+          resources: { requests: { cpu: 200m, memory: 512Mi }, limits: { cpu: "1", memory: 1Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: genai-service, namespace: invoice-tracker }
+spec:
+  selector: { app: genai-service }
+  ports: [{ port: 8003, targetPort: 8003 }]
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: invoice-tracker
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: notification-service } }
+  template:
+    metadata: { labels: { app: notification-service } }
+    spec:
+      containers:
+        - name: notification-service
+          image: ${REGISTRY}/notification-service:${TAG}
+          ports: [{ containerPort: 8004 }]
+          envFrom:
+            - configMapRef: { name: invoice-tracker-config }
+            - secretRef: { name: invoice-tracker-secrets }
+          readinessProbe: { httpGet: { path: /health, port: 8004 }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /health, port: 8004 }, periodSeconds: 30 }
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: 500m, memory: 512Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: notification-service, namespace: invoice-tracker }
+spec:
+  selector: { app: notification-service }
+  ports: [{ port: 8004, targetPort: 8004 }]
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: invoice-tracker
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: auth-service } }
+  template:
+    metadata: { labels: { app: auth-service } }
+    spec:
+      containers:
+        - name: auth-service
+          image: ${REGISTRY}/auth-service:${TAG}
+          ports: [{ containerPort: 8005 }]
+          envFrom:
+            - configMapRef: { name: invoice-tracker-config }
+            - secretRef: { name: invoice-tracker-secrets }
+          readinessProbe: { httpGet: { path: /health, port: 8005 }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /health, port: 8005 }, periodSeconds: 30 }
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: 500m, memory: 512Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: auth-service, namespace: invoice-tracker }
+spec:
+  selector: { app: auth-service }
+  ports: [{ port: 8005, targetPort: 8005 }]
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ocr-service
+  namespace: invoice-tracker
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ocr-service } }
+  template:
+    metadata: { labels: { app: ocr-service } }
+    spec:
+      containers:
+        - name: ocr-service
+          image: ${REGISTRY}/ocr-service:${TAG}
+          ports: [{ containerPort: 8006 }]
+          envFrom:
+            - configMapRef: { name: invoice-tracker-config }
+            - secretRef: { name: invoice-tracker-secrets }
+          readinessProbe: { httpGet: { path: /health, port: 8006 }, periodSeconds: 10, failureThreshold: 12 }
+          livenessProbe: { httpGet: { path: /health, port: 8006 }, periodSeconds: 30 }
+          resources: { requests: { cpu: 300m, memory: 768Mi }, limits: { cpu: "1", memory: 1.5Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: ocr-service, namespace: invoice-tracker }
+spec:
+  selector: { app: ocr-service }
+  ports: [{ port: 8006, targetPort: 8006 }]
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: invoice-tracker
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: web } }
+  template:
+    metadata: { labels: { app: web } }
+    spec:
+      containers:
+        - name: web
+          image: ${REGISTRY}/web:${TAG}
+          ports: [{ containerPort: 3000 }]
+          envFrom:
+            - configMapRef: { name: invoice-tracker-config }
+            - secretRef: { name: invoice-tracker-secrets }
+          readinessProbe: { httpGet: { path: /, port: 3000 }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /, port: 3000 }, periodSeconds: 30 }
+          resources: { requests: { cpu: 200m, memory: 256Mi }, limits: { cpu: "1", memory: 512Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: web, namespace: invoice-tracker }
+spec:
+  selector: { app: web }
+  ports: [{ port: 3000, targetPort: 3000 }]

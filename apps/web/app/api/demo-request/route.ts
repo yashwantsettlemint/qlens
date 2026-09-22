@@ -1,4 +1,4 @@
-import { hasura, NOTIFICATION_URL } from "@/server/hasura";
+import { hasura, NOTIFICATION_URL, internalServiceHeaders } from "@/server/hasura";
 
 /**
  * Public lead-gen form on the landing page's "Book a demo" — no session, no
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
   try {
     resp = await fetch(`${NOTIFICATION_URL}/notify/demo-request`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...internalServiceHeaders() },
       body: JSON.stringify({
         company_name: companyName,
         contact_name: contactName,

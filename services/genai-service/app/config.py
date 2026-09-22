@@ -5,11 +5,12 @@ HASURA_ENDPOINT = (
     or os.getenv("HASURA_GRAPHQL_ENDPOINT")
     or "http://localhost:8088/v1/graphql"
 )
-# genai-service authenticates as genai_readonly for everything EXCEPT the /embed
-# write path, which uses the admin secret (see app/hasura.run_admin).
+# genai-service authenticates as genai_readonly for reads and genai_writer
+# for /embed + /embed/backfill (see hasura/metadata's genai_writer role) —
+# both self-minted JWTs, never the admin secret.
 GENAI_ROLE = "genai_readonly"
+GENAI_WRITER_ROLE = "genai_writer"
 GENAI_USER_ID = "genai-service"
-HASURA_ADMIN_SECRET = os.getenv("HASURA_ADMIN_SECRET", "").strip()
 
 # RAG: CPU sentence-transformers model for invoice embeddings.
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2").strip()

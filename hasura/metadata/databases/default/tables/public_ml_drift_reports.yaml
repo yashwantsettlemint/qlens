@@ -1,5 +1,22 @@
 table:
   name: ml_drift_reports
   schema: public
-# Admin-only, read and written through the BFF/ml-service with the admin
-# secret (same as company_settings) — no per-role permissions needed here.
+insert_permissions:
+  - role: ml_service
+    permission:
+      check: {}
+      set:
+        company_id: X-Hasura-Company-Id
+      columns:
+        - model_name
+        - checked_at
+        - drift_detected
+        - feature_psi
+        - rolling_metrics
+        - baseline_metrics
+        - notes
+select_permissions:
+  - role: ml_service
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }

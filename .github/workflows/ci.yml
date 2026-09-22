@@ -42,3 +42,18 @@ jobs:
             echo "== $t =="
             (cd "$svc" && PYTHONPATH="$svc" python "tests/$(basename "$t")") || exit 1
           done
+
+  # ponytail: build-only, catches a broken Dockerfile — wire up registry push
+  # + `kubectl apply` once a registry/cluster target is chosen (see infra/k8s/).
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build every service image
+        run: |
+          for d in services/*/; do
+            name="$(basename "$d")"
+            docker build -f "$d/Dockerfile" -t "$name:ci" .
+          done
+      - name: Build web image
+        run: docker build -f apps/web/Dockerfile -t web:ci .

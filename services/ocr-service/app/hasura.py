@@ -1,25 +1,35 @@
-"""Hasura access for ocr-service — admin secret. Writes an invalid draft into
-`review_queue`; reads `invoices` to flag a likely re-upload of the same invoice
-(a trusted in-cluster service, per the ml-service / notification-service pattern).
+"""Hasura access for ocr-service, as the company-scoped `ocr_service` role
+(self-minted JWT — see hasura/metadata's ocr_service permissions). Writes an
+invalid draft into `review_queue`; reads `invoices`/`companies` to flag a
+likely re-upload and match vendor aliases.
 """
 
 from __future__ import annotations
 
 import httpx
 
-from .config import HASURA_ADMIN_SECRET, HASURA_ENDPOINT
+from shared_types.jwt import bearer, mint_hasura_jwt
+
+from .config import HASURA_ENDPOINT, OCR_ROLE, OCR_USER_ID
 
 
 class HasuraError(RuntimeError):
     pass
 
 
-async def _gql(query: str, variables: dict) -> dict:
+def _headers(company_id: str) -> dict[str, str]:
+    token = mint_hasura_jwt(
+        OCR_ROLE, OCR_USER_ID, ttl_seconds=300, extra_hasura_claims={"x-hasura-company-id": company_id}
+    )
+    return {**bearer(token), "x-hasura-role": OCR_ROLE}
+
+
+async def _gql(query: str, variables: dict, company_id: str) -> dict:
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             HASURA_ENDPOINT,
             json={"query": query, "variables": variables},
-            headers={"x-hasura-admin-secret": HASURA_ADMIN_SECRET},
+            headers=_headers(company_id),
         )
     resp.raise_for_status()
     body = resp.json()
@@ -29,14 +39,17 @@ async def _gql(query: str, variables: dict) -> dict:
 
 
 _INSERT = """
-mutation AddReviewDraft($draft: jsonb!, $issues: [String!]!, $companyId: uuid!) {
-  insert_review_queue_one(object: {invoice_draft: $draft, issues: $issues, company_id: $companyId}) { id }
+mutation AddReviewDraft($draft: jsonb!, $issues: [String!]!) {
+  insert_review_queue_one(object: {invoice_draft: $draft, issues: $issues}) { id }
 }
 """
 
 
 async def insert_review_queue(draft: dict, issues: list[str], company_id: str) -> str:
-    data = await _gql(_INSERT, {"draft": draft, "issues": issues, "companyId": company_id})
+    # company_id isn't sent — it's forced server-side by the ocr_service
+    # role's insert `set` preset (a preset column can't also be a client-set
+    # field on the generated insert_input type).
+    data = await _gql(_INSERT, {"draft": draft, "issues": issues}, company_id)
     return data["insert_review_queue_one"]["id"]
 
 
@@ -59,7 +72,7 @@ query CompanySettings($id: uuid!) {
 
 async def fetch_company_settings(company_id: str) -> dict:
     """-> {name, aliases} for this tenant. `name` is "" until an admin sets it."""
-    data = await _gql(_COMPANY_SETTINGS, {"id": company_id})
+    data = await _gql(_COMPANY_SETTINGS, {"id": company_id}, company_id)
     row = data.get("companies_by_pk") or {}
     return {"name": row.get("name") or "", "aliases": row.get("aliases") or []}
 
@@ -73,7 +86,7 @@ async def find_existing_by_number(invoice_number: str, company_id: str) -> list[
     num = (invoice_number or "").strip()
     if not num:
         return []
-    rows = (await _gql(_FIND_DUP, {"num": num, "companyId": company_id}))["invoices"]
+    rows = (await _gql(_FIND_DUP, {"num": num, "companyId": company_id}, company_id))["invoices"]
     return [
         {
             "id": r["id"],

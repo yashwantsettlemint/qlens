@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@apollo/client";
 import { InvoiceDetailQuery } from "@/graphql/operations/queries";
 import { SetCollectionStatusMutation, DeleteInvoiceMutation, ResendInvoiceMutation } from "@/graphql/operations/mutations";
-import { useState } from "react";
+import { useState, use } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Panel } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
@@ -22,7 +22,8 @@ import { useRole } from "@/lib/role";
 
 const STAGES = ["DRAFT", "SENT", "DISPUTED", "SETTLED"] as const;
 
-export default function ReceivableDetailPage({ params }: { params: { id: string } }) {
+export default function ReceivableDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const { can } = useRole();
   const router = useRouter();
   const { data, loading, error } = useQuery(InvoiceDetailQuery, {

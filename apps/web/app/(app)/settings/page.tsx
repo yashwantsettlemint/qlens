@@ -61,9 +61,13 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!data?.companySettings) return;
+    // intentional: seeds editable form fields once the query resolves, not
+    // state derivable during render.
+    /* eslint-disable react-hooks/set-state-in-effect */
     setName(data.companySettings.name);
     setAliases(data.companySettings.aliases.join(", "));
     setTax(Object.fromEntries(TAX_FIELDS.map((f) => [f.name, data.companySettings[f.name] ?? ""])) as Record<TaxField, string>);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [data]);
 
   async function submitTax(e: React.FormEvent) {
@@ -193,7 +197,7 @@ export default function SettingsPage() {
 
       <Panel title="Digital signature" className="mt-6">
         <p className="mb-3 text-xs text-ink-muted">
-          Draw a signature once, or upload an image — it's stamped on every invoice you generate
+          Draw a signature once, or upload an image — it&apos;s stamped on every invoice you generate
           and send from Invoices → Create &amp; send.
         </p>
         <SignaturePad savedDataUrl={data?.companySettings.signatureDataUrl ?? null} />

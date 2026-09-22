@@ -7,8 +7,9 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+from shared_types.auth import require_internal_token
 
 from .hasura import HasuraError, fetch_lookups, insert_invoices
 from .validation import parse_csv, validate_row
@@ -62,7 +63,7 @@ async def _validate(rows: list[dict], default_source: str, company_id: str) -> l
     return results
 
 
-@app.post("/upload/csv", response_model=ValidateResponse)
+@app.post("/upload/csv", response_model=ValidateResponse, dependencies=[Depends(require_internal_token)])
 async def upload_csv(file: UploadFile = File(...), company_id: str = Form(...)) -> ValidateResponse:
     if not (file.filename or "").lower().endswith(".csv"):
         raise HTTPException(400, "expected a .csv file")
@@ -80,7 +81,7 @@ async def upload_csv(file: UploadFile = File(...), company_id: str = Form(...)) 
     )
 
 
-@app.post("/upload/csv/commit")
+@app.post("/upload/csv/commit", dependencies=[Depends(require_internal_token)])
 async def commit_csv(req: CommitRequest) -> dict:
     if not req.rows:
         raise HTTPException(400, "no rows to commit")
@@ -95,7 +96,7 @@ async def commit_csv(req: CommitRequest) -> dict:
     return {"committed": res["affected_rows"], "invoices": res["returning"]}
 
 
-@app.post("/upload/manual")
+@app.post("/upload/manual", dependencies=[Depends(require_internal_token)])
 async def upload_manual(inv: ManualInvoice) -> dict:
     payload = inv.model_dump()
     created_by = payload.pop("created_by")

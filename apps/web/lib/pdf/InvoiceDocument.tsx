@@ -203,7 +203,7 @@ function ExtraRefs({ buyerOrderNo, ackNo }: { buyerOrderNo?: string | null; ackN
     <>
       {buyerOrderNo ? (
         <>
-          <Text style={styles.label}>Buyer's order no.</Text>
+          <Text style={styles.label}>Buyer&apos;s order no.</Text>
           <Text style={styles.value}>{buyerOrderNo}</Text>
         </>
       ) : null}
@@ -499,7 +499,7 @@ export function InvoiceDocument(data: InvoiceDocumentData) {
               </View>
               {data.buyerOrderNo ? (
                 <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                  <Text style={styles.label}>Buyer's order no.</Text>
+                  <Text style={styles.label}>Buyer&apos;s order no.</Text>
                   <Text style={{ fontSize: 9 }}>{data.buyerOrderNo}</Text>
                 </View>
               ) : null}

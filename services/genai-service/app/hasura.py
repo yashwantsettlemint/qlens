@@ -1,10 +1,13 @@
-"""Hasura access for genai-service.
+"""Hasura access for genai-service — two self-minted JWT roles, never the
+admin secret:
 
-`run_query` — role `genai_readonly` via a self-minted JWT (never the admin
-secret). Everything reads through this. `run_admin` — the admin secret, used
-ONLY by the /embed write path (read full invoice context + upsert the embedding
-row). If Hasura rejects the readonly role somewhere it shouldn't, that's the
-guardrail working.
+`run_query` — role `genai_readonly`, company-scoped. Everything reads through
+this except the /embed write path.
+`run_writer` — role `genai_writer`. Its `invoices` grant is deliberately
+cross-tenant (see hasura/metadata) because /embed's invoice read and
+/embed/backfill's id sweep both run before the invoice's own company_id is
+known; its `invoice_embeddings` insert/delete grant IS company-scoped, via a
+real company_id once the invoice read above has returned one.
 """
 
 from __future__ import annotations
@@ -13,18 +16,18 @@ import httpx
 
 from shared_types.jwt import bearer, mint_hasura_jwt
 
-from .config import GENAI_ROLE, GENAI_USER_ID, HASURA_ADMIN_SECRET, HASURA_ENDPOINT
+from .config import GENAI_ROLE, GENAI_USER_ID, GENAI_WRITER_ROLE, HASURA_ENDPOINT
 
 
 class HasuraError(RuntimeError):
     pass
 
 
-def _headers(company_id: str) -> dict[str, str]:
+def _headers(role: str, company_id: str) -> dict[str, str]:
     token = mint_hasura_jwt(
-        GENAI_ROLE, GENAI_USER_ID, ttl_seconds=300, extra_hasura_claims={"x-hasura-company-id": company_id}
+        role, GENAI_USER_ID, ttl_seconds=300, extra_hasura_claims={"x-hasura-company-id": company_id}
     )
-    return {**bearer(token), "x-hasura-role": GENAI_ROLE}
+    return {**bearer(token), "x-hasura-role": role}
 
 
 async def _post(query: str, variables: dict, headers: dict[str, str]) -> dict:
@@ -42,17 +45,18 @@ async def _post(query: str, variables: dict, headers: dict[str, str]) -> dict:
 
 
 async def run_query(query: str, variables: dict, company_id: str) -> dict:
-    return await _post(query, variables, _headers(company_id))
+    return await _post(query, variables, _headers(GENAI_ROLE, company_id))
 
 
-async def run_admin(query: str, variables: dict) -> dict:
-    """Admin-scoped, no company filtering — /embed's invoice read (id is
-    already globally unique, and the row it returns carries its own
-    company_id for the caller to use) and /embed/backfill's all-companies
-    maintenance sweep."""
-    if not HASURA_ADMIN_SECRET:
-        raise HasuraError("HASURA_ADMIN_SECRET is not set — /embed is disabled")
-    return await _post(query, variables, {"x-hasura-admin-secret": HASURA_ADMIN_SECRET})
+_NO_COMPANY = "00000000-0000-0000-0000-000000000000"  # must still be a well-formed uuid for the JWT claim
+
+
+async def run_writer(query: str, variables: dict, company_id: str = _NO_COMPANY) -> dict:
+    """`company_id` only matters for calls that touch `invoice_embeddings`
+    (its permission filter is relationship-based, through `invoice`) — the
+    cross-tenant `invoices` reads don't use the claim at all, so the zero
+    uuid is fine for those."""
+    return await _post(query, variables, _headers(GENAI_WRITER_ROLE, company_id))
 
 
 # ---- RAG: semantic search (genai_readonly) + embed write (admin) --------------
@@ -97,10 +101,11 @@ query InvoiceIds {
 
 async def list_invoice_ids() -> list[str]:
     """All invoice ids across every company, for the /embed/backfill sweep —
-    a maintenance operation, not a per-tenant one, so it runs admin-scoped
-    like fetch_invoice_full (each invoice's own company_id comes back with
-    it, so the per-invoice embed write is still correctly scoped)."""
-    data = await run_admin(_INVOICE_IDS, {})
+    a maintenance operation, not a per-tenant one, so it runs genai_writer's
+    cross-tenant `invoices` grant, id-only (each invoice's own company_id
+    comes back from fetch_invoice_full, so the per-invoice embed write is
+    still correctly scoped)."""
+    data = await run_writer(_INVOICE_IDS, {})
     return [r["id"] for r in data["invoices"]]
 
 _INVOICE_SUMMARY_CTX = """
@@ -122,7 +127,7 @@ async def fetch_invoice_summary_context(invoice_id: str, company_id: str) -> dic
 
 
 async def fetch_invoice_full(invoice_id: str) -> dict | None:
-    data = await run_admin(_INVOICE_FULL, {"id": invoice_id})
+    data = await run_writer(_INVOICE_FULL, {"id": invoice_id})
     return data.get("invoices_by_pk")
 
 
@@ -148,9 +153,11 @@ async def replace_embeddings(invoice_id: str, chunks: list[tuple[str, str]], com
     (chunk_text, vec_literal pairs, in order) — always a clean delete + fresh
     insert rather than incremental upsert, so a re-embed that produces fewer
     chunks than last time doesn't leave stale rows behind."""
-    await run_admin(_CLEAR_CHUNKS, {"id": invoice_id})
+    await run_writer(_CLEAR_CHUNKS, {"id": invoice_id}, company_id)
     for i, (chunk_text, vec_literal) in enumerate(chunks):
-        await run_admin(_UPSERT, {"id": invoice_id, "i": i, "t": chunk_text, "e": vec_literal, "c": company_id})
+        await run_writer(
+            _UPSERT, {"id": invoice_id, "i": i, "t": chunk_text, "e": vec_literal, "c": company_id}, company_id
+        )
 
 
 _EXPLAIN = """

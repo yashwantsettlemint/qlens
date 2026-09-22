@@ -1,4 +1,5 @@
-"use client";
+"use client";;
+import { use } from "react";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -23,7 +24,8 @@ import { PaymentPanel } from "@/components/invoice/PaymentPanel";
 import { inr, fmtDate } from "@/lib/format";
 import { useRole } from "@/lib/role";
 
-export default function InvoiceDetailPage({ params }: { params: { id: string } }) {
+export default function InvoiceDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const { can } = useRole();
   const router = useRouter();
   const { data, loading, error } = useQuery(InvoiceDetailQuery, {

@@ -18,3 +18,21 @@ select_permissions:
     permission:
       columns: "*"
       filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: genai_readonly
+    # invoiceSummary's lineItems relationship (services/genai-service's
+    # _INVOICE_SUMMARY_CTX query) needs this to traverse invoices.lineItems.
+    permission:
+      columns:
+        - description
+        - quantity
+        - unit_price
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: genai_writer
+    # Needed for the `lineItems` relationship under invoices in
+    # _INVOICE_FULL — cross-tenant, same as genai_writer's invoices grant.
+    permission:
+      columns:
+        - description
+        - quantity
+        - unit_price
+      filter: {}

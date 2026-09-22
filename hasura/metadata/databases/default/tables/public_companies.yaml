@@ -2,5 +2,14 @@ table:
   name: companies
   schema: public
 # One row per tenant. Read/written through the BFF with the admin secret
-# (register/invite flow goes through auth-service, not Hasura directly) —
-# no per-role permissions needed here, same as company_settings before it.
+# (register/invite flow goes through auth-service, not Hasura directly).
+select_permissions:
+  - role: ocr_service
+    # Only what fetch_company_settings (name-alias matching for OCR'd vendor
+    # names) reads — own company only.
+    permission:
+      columns:
+        - id
+        - name
+        - aliases
+      filter: { id: { _eq: X-Hasura-Company-Id } }

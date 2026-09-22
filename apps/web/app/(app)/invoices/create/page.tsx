@@ -74,9 +74,12 @@ export default function CreateInvoicePage() {
   // on file yet) are saved back to the customer on submit, so next time
   // they're picked this happens automatically.
   useEffect(() => {
+    // intentional: autofill on customer selection, not state derivable during render.
+    /* eslint-disable react-hooks/set-state-in-effect */
     setBuyerAddress(selectedCustomer?.address ?? "");
     setBuyerGstin(selectedCustomer?.gstin ?? "");
     setBuyerState(selectedCustomer?.state ?? "");
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [customerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const previewData: InvoiceDocumentData = useMemo(() => {
@@ -270,8 +273,8 @@ export default function CreateInvoicePage() {
 
           <Panel title="Buyer details">
             <p className="mb-3 text-xs text-ink-muted">
-              Autofilled from the customer's saved record — edit here for a one-off change, or to fill
-              in a new customer that doesn't have these on file yet. Edits are saved back to the
+              Autofilled from the customer&apos;s saved record — edit here for a one-off change, or to fill
+              in a new customer that doesn&apos;t have these on file yet. Edits are saved back to the
               customer when you send.
             </p>
             <div className="grid gap-4 md:grid-cols-2">

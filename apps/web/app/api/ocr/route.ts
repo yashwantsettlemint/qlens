@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { verifyHS256, type Claims } from "@/server/jwt";
 import { SESSION_COOKIE } from "@/server/auth";
+import { internalServiceHeaders } from "@/server/hasura";
 
 /**
  * BFF: proxies a document upload (PDF / image) to ocr-service /extract. Keeps
@@ -24,7 +25,7 @@ const fail = (status: number, message: string) => Response.json({ error: message
 
 export async function POST(req: Request) {
   let claims: Claims | null = null;
-  const token = cookies().get(SESSION_COOKIE)?.value;
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (token) {
     claims = verifyHS256(token, JWT_SECRET);
     if (!claims) return fail(401, "Your session has expired — sign in again.");
@@ -50,7 +51,7 @@ export async function POST(req: Request) {
 
   let resp: Response;
   try {
-    resp = await fetch(`${OCR_URL}/extract`, { method: "POST", body: out });
+    resp = await fetch(`${OCR_URL}/extract`, { method: "POST", headers: internalServiceHeaders(), body: out });
   } catch {
     return fail(502, "ocr-service is unreachable — is the stack up?");
   }

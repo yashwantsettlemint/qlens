@@ -33,3 +33,33 @@ select_permissions:
     permission:
       columns: "*"
       filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: ocr_service
+    permission:
+      columns:
+        - id
+        - name
+        - company_id
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: notifier
+    # Cross-tenant, same as its `invoices` permission — see public_invoices.yaml.
+    permission:
+      columns:
+        - id
+        - name
+        - email
+      filter: {}
+  - role: genai_writer
+    # Needed for the `vendor { name }` relationship under invoices in
+    # _INVOICE_FULL — cross-tenant, same as genai_writer's invoices grant.
+    permission:
+      columns:
+        - name
+      filter: {}
+  - role: ml_service
+    # No vendor columns are actually read — just needed to expose the
+    # `vendor { invoices {...} }` relationship traversal in ml/train.py's
+    # payment-history query.
+    permission:
+      columns:
+        - id
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }

@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hasura
+  namespace: invoice-tracker
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: hasura }
+  template:
+    metadata:
+      labels: { app: hasura }
+    spec:
+      containers:
+        - name: hasura
+          image: hasura/graphql-engine:v2.42.0.cli-migrations-v3
+          ports: [{ containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: invoice-tracker-config }
+            - secretRef: { name: invoice-tracker-secrets }
+          volumeMounts:
+            - { name: migrations, mountPath: /hasura-migrations }
+            - { name: metadata, mountPath: /hasura-metadata }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+      volumes:
+        # Hasura's migrations/metadata images ship these baked in; if you're
+        # not building a custom Hasura image, drop these two volumes and let
+        # `hasura metadata apply` / `hasura migrate apply` push them from CI
+        # instead — see hasura/README (if present) for the CLI workflow.
+        - name: migrations
+          configMap: { name: hasura-migrations, optional: true }
+        - name: metadata
+          configMap: { name: hasura-metadata, optional: true }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hasura
+  namespace: invoice-tracker
+spec:
+  selector: { app: hasura }
+  ports: [{ port: 8080, targetPort: 8080 }]

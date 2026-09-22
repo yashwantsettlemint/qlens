@@ -6,6 +6,5 @@
 **/*.pyc
 **/*.egg-info
 .git
-apps/web
 infra/.env
 **/.env

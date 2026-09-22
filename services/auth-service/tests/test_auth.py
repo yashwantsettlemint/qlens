@@ -15,6 +15,7 @@ from app.users import authenticate, list_users  # noqa: E402
 from app.main import login, register, me, refresh, create_invite_route, accept_invite_route  # noqa: E402
 from app.main import LoginRequest, RegisterRequest, InviteRequest, AcceptInviteRequest  # noqa: E402
 from app.main import set_user_active_route, SetActiveRequest  # noqa: E402
+from app.users import MAX_FAILED_ATTEMPTS  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
 
@@ -85,6 +86,20 @@ def run() -> None:
         raise AssertionError("expected 400")
     except HTTPException as e:
         assert e.status_code == 400
+
+    # lockout — a fresh account (not touched by earlier failed logins above),
+    # MAX_FAILED_ATTEMPTS bad passwords in a row locks it even for the right one
+    for _ in range(MAX_FAILED_ATTEMPTS):
+        try:
+            login(LoginRequest(username="admin", password="wrong-password"))
+            raise AssertionError("expected 401")
+        except HTTPException as e:
+            assert e.status_code == 401
+    try:
+        login(LoginRequest(username="admin", password="hunter22"))  # correct password, still locked
+        raise AssertionError("expected 429")
+    except HTTPException as e:
+        assert e.status_code == 429
 
     print("auth-service: all checks passed")
 

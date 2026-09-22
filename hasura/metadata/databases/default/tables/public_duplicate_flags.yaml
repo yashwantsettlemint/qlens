@@ -13,6 +13,24 @@ object_relationships:
           schema: public
         column_mapping:
           matched_invoice_id: id
+insert_permissions:
+  - role: ml_service
+    permission:
+      check: {}
+      set:
+        company_id: X-Hasura-Company-Id
+      columns:
+        - invoice_id
+        - matched_invoice_id
+        - confidence_score
+        - method
+        - reviewed_status
+        - reason
+        - explanation
+delete_permissions:
+  - role: ml_service
+    permission:
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
 select_permissions:
   - role: finance_user
     permission:
@@ -27,6 +45,13 @@ select_permissions:
       columns: "*"
       filter: { company_id: { _eq: X-Hasura-Company-Id } }
   - role: genai_readonly
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: ml_service
+    # Not read directly — needed so Hasura exposes invoice_id/reviewed_status
+    # in this role's generated bool_exp, which the delete-then-insert
+    # rescoring mutation's `where` clause relies on.
     permission:
       columns: "*"
       filter: { company_id: { _eq: X-Hasura-Company-Id } }

@@ -3,8 +3,8 @@
 LLM summaries / explanations **and hybrid RAG** over the invoice data.
 Authenticates to Hasura as `genai_readonly` (self-minted JWT, never the admin secret) and
 only through the whitelist in `app/whitelist.py` / the tracked `match_invoice_embeddings`
-function. The **one exception** is `/embed`, which uses `HASURA_ADMIN_SECRET` to read full
-invoice context and write `invoice_embeddings`.
+function. `/embed` and `/embed/backfill` instead self-mint a `genai_writer` JWT to read
+full invoice context and write `invoice_embeddings`.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
@@ -53,8 +53,7 @@ embedding model still runs (it's CPU / local), so semantic search works offline 
 | Var | Default |
 |---|---|
 | `HASURA_ENDPOINT` | `http://localhost:8088/v1/graphql` |
-| `HASURA_GRAPHQL_JWT_SECRET` | (required — to mint the genai_readonly token) |
-| `HASURA_ADMIN_SECRET` | (required for `/embed`; unset → `/embed` returns `skipped`) |
+| `HASURA_GRAPHQL_JWT_SECRET` | (required — to mint the genai_readonly / genai_writer tokens) |
 | `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` (must be 384-dim) |
 | `EMBEDDING_DIM` | `384` |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | any OpenAI-compatible endpoint (Groq, OpenAI, Ollama…); unset → offline |

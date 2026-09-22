@@ -1,25 +1,35 @@
 """Hasura access for ml-service. Reads context (vendor's other invoices, vendor
 payment history) and writes results back to duplicate_flags / delay_predictions
-as admin (per the brief — an admin-scoped service token).
+as `ml_service` — a company-scoped role, self-minted per call (see
+hasura/metadata's ml_service permissions), not the admin secret.
 """
 
 from __future__ import annotations
 
 import httpx
 
-from .config import HASURA_ADMIN_SECRET, HASURA_ENDPOINT
+from shared_types.jwt import bearer, mint_hasura_jwt
+
+from .config import HASURA_ENDPOINT, ML_ROLE, ML_USER_ID
 
 
 class HasuraError(RuntimeError):
     pass
 
 
-async def _gql(query: str, variables: dict) -> dict:
+def _headers(company_id: str) -> dict[str, str]:
+    token = mint_hasura_jwt(
+        ML_ROLE, ML_USER_ID, ttl_seconds=300, extra_hasura_claims={"x-hasura-company-id": company_id}
+    )
+    return {**bearer(token), "x-hasura-role": ML_ROLE}
+
+
+async def _gql(query: str, variables: dict, company_id: str) -> dict:
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.post(
             HASURA_ENDPOINT,
             json={"query": query, "variables": variables},
-            headers={"x-hasura-admin-secret": HASURA_ADMIN_SECRET},
+            headers=_headers(company_id),
         )
     resp.raise_for_status()
     body = resp.json()
@@ -51,10 +61,10 @@ def _party_col(direction: str) -> str:
 
 
 async def fetch_context(
-    party_id: str, self_id: str | None, direction: str = "payable"
+    party_id: str, self_id: str | None, company_id: str, direction: str = "payable"
 ) -> tuple[list[dict], list[dict]]:
     query = _CONTEXT % {"col": _party_col(direction)}
-    data = await _gql(query, {"partyId": party_id, "selfId": self_id or _ZERO_UUID})
+    data = await _gql(query, {"partyId": party_id, "selfId": self_id or _ZERO_UUID}, company_id)
     paid_history = [
         {"due_date": r["due_date"], "paid_at": (r["payments"][0]["paid_at"] if r["payments"] else None)}
         for r in data["paid"]
@@ -71,11 +81,11 @@ query PartyOpen($partyId: uuid!) {
 """
 
 
-async def fetch_open_invoices(party_id: str, direction: str = "payable") -> list[dict]:
+async def fetch_open_invoices(party_id: str, company_id: str, direction: str = "payable") -> list[dict]:
     """This party's still-unpaid invoices — re-scored when their on-time rate
     shifts (i.e. one of their invoices is marked paid)."""
     query = _PARTY_OPEN % {"col": _party_col(direction)}
-    return (await _gql(query, {"partyId": party_id}))["invoices"]
+    return (await _gql(query, {"partyId": party_id}, company_id))["invoices"]
 
 
 _WRITE_DUP = """
@@ -99,7 +109,9 @@ async def write_duplicate_flag(invoice_id: str, company_id: str, match) -> None:
     obj = (
         [{
             "invoice_id": invoice_id,
-            "company_id": company_id,
+            # company_id is NOT sent here — it's forced server-side by the
+            # ml_service role's insert `set` preset (a column in `set` isn't
+            # a valid field on the generated *_insert_input type at all).
             "matched_invoice_id": match.matched_invoice_id,
             "confidence_score": match.confidence_score,
             "method": match.method,
@@ -113,7 +125,7 @@ async def write_duplicate_flag(invoice_id: str, company_id: str, match) -> None:
         if match
         else []
     )
-    await _gql(_WRITE_DUP, {"invoiceId": invoice_id, "obj": obj})
+    await _gql(_WRITE_DUP, {"invoiceId": invoice_id, "obj": obj}, company_id)
 
 
 async def write_delay_prediction(invoice_id: str, company_id: str, prediction: dict) -> None:
@@ -123,13 +135,13 @@ async def write_delay_prediction(invoice_id: str, company_id: str, prediction: d
             "invoiceId": invoice_id,
             "obj": {
                 "invoice_id": invoice_id,
-                "company_id": company_id,
                 "delay_probability": prediction["delay_probability"],
                 "predicted_delay_days": prediction["predicted_delay_days"],
                 "model_version": prediction["model_version"],
                 "explanation": prediction.get("explanation") or [],
             },
         },
+        company_id,
     )
 
 
@@ -150,7 +162,7 @@ async def fetch_recent_invoices(company_id: str, limit: int = 500) -> list[dict]
     sampling — not restricted to paid ones (unlike the training/performance-
     drift query), since feature drift is about what's being *scored*, not
     just settled."""
-    data = await _gql(_RECENT_INVOICES, {"limit": limit, "companyId": company_id})
+    data = await _gql(_RECENT_INVOICES, {"limit": limit, "companyId": company_id}, company_id)
     return data["invoices"]
 
 
@@ -162,7 +174,9 @@ mutation InsertDrift($obj: ml_drift_reports_insert_input!) {
 
 
 async def insert_drift_report(report: dict, company_id: str) -> None:
-    await _gql(_INSERT_DRIFT, {"obj": {**report, "company_id": company_id}})
+    # company_id isn't sent in `report` — it's forced server-side by the
+    # ml_service role's insert `set` preset.
+    await _gql(_INSERT_DRIFT, {"obj": report}, company_id)
 
 
 _INSERT_RETRAIN = """
@@ -179,12 +193,14 @@ mutation UpdateRetrain($id: uuid!, $set: ml_retrain_events_set_input!) {
 
 
 async def insert_retrain_event(event: dict, company_id: str) -> str:
-    data = await _gql(_INSERT_RETRAIN, {"obj": {**event, "company_id": company_id}})
+    # company_id isn't sent in `event` — it's forced server-side by the
+    # ml_service role's insert `set` preset.
+    data = await _gql(_INSERT_RETRAIN, {"obj": event}, company_id)
     return data["insert_ml_retrain_events_one"]["id"]
 
 
-async def update_retrain_event(event_id: str, patch: dict) -> None:
-    await _gql(_UPDATE_RETRAIN, {"id": event_id, "set": patch})
+async def update_retrain_event(event_id: str, patch: dict, company_id: str) -> None:
+    await _gql(_UPDATE_RETRAIN, {"id": event_id, "set": patch}, company_id)
 
 
 _LATEST_DRIFT = """
@@ -200,7 +216,7 @@ query LatestDrift($companyId: uuid!) {
 
 
 async def fetch_latest_drift(company_id: str) -> dict:
-    data = await _gql(_LATEST_DRIFT, {"companyId": company_id})
+    data = await _gql(_LATEST_DRIFT, {"companyId": company_id}, company_id)
     return {
         "duplicate": (data["duplicate"] or [None])[0],
         "delay": (data["delay"] or [None])[0],
@@ -220,5 +236,5 @@ query RetrainHistory($limit: Int!, $companyId: uuid!) {
 
 
 async def fetch_retrain_history(company_id: str, limit: int = 20) -> list[dict]:
-    data = await _gql(_RETRAIN_HISTORY, {"limit": limit, "companyId": company_id})
+    data = await _gql(_RETRAIN_HISTORY, {"limit": limit, "companyId": company_id}, company_id)
     return data["ml_retrain_events"]

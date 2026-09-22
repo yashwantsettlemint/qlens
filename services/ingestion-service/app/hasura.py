@@ -1,8 +1,5 @@
-"""Thin Hasura GraphQL client. Reads/writes as a trusted backend service.
-
-ponytail: authenticates with the admin secret + an `x-hasura-role` override
-(fine for a trusted in-cluster service). Swap for a minted finance_user JWT if
-this service is ever exposed outside the cluster.
+"""Thin Hasura GraphQL client. Reads/writes as a self-minted `finance_user`
+JWT (never the admin secret) — see hasura/metadata's finance_user permissions.
 """
 
 from __future__ import annotations
@@ -11,39 +8,32 @@ import os
 
 import httpx
 
+from shared_types.jwt import bearer, mint_hasura_jwt
+
 ENDPOINT = (
     os.getenv("HASURA_ENDPOINT")
     or os.getenv("HASURA_GRAPHQL_ENDPOINT")
     or "http://localhost:8088/v1/graphql"
 )
-ADMIN_SECRET = (
-    os.getenv("HASURA_ADMIN_SECRET")
-    or os.getenv("HASURA_GRAPHQL_ADMIN_SECRET")
-    or "devsecret"
-)
+ROLE = "finance_user"
 
 
 class HasuraError(RuntimeError):
     pass
 
 
-async def _gql(
-    query: str,
-    variables: dict,
-    *,
-    role: str | None = None,
-    user_id: str | None = None,
-    company_id: str | None = None,
-) -> dict:
-    headers = {"x-hasura-admin-secret": ADMIN_SECRET}
-    if role:
-        headers["x-hasura-role"] = role
-    if user_id:
-        headers["x-hasura-user-id"] = user_id
-    if company_id:
-        headers["x-hasura-company-id"] = company_id
+def _headers(user_id: str, company_id: str) -> dict[str, str]:
+    token = mint_hasura_jwt(
+        ROLE, user_id, ttl_seconds=300, extra_hasura_claims={"x-hasura-company-id": company_id}
+    )
+    return {**bearer(token), "x-hasura-role": ROLE}
+
+
+async def _gql(query: str, variables: dict, *, user_id: str, company_id: str) -> dict:
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(ENDPOINT, json={"query": query, "variables": variables}, headers=headers)
+        resp = await client.post(
+            ENDPOINT, json={"query": query, "variables": variables}, headers=_headers(user_id, company_id)
+        )
     resp.raise_for_status()
     body = resp.json()
     if body.get("errors"):
@@ -58,7 +48,7 @@ async def fetch_lookups(company_id: str) -> tuple[dict[str, str], dict[str, str]
     data = await _gql(
         "{ vendors { id name } purchase_orders { id po_number } }",
         {},
-        role="finance_user",
+        user_id="ingestion-service",
         company_id=company_id,
     )
     vendors = {r["name"].lower(): r["id"] for r in data["vendors"]}
@@ -81,5 +71,5 @@ async def insert_invoices(objects: list[dict], created_by: str, company_id: str)
     event trigger. company_id is auto-set by Hasura's insert permission preset
     (see hasura/metadata's invoices.yaml) from the x-hasura-company-id header."""
     payload = [{**obj, "created_by": created_by} for obj in objects]
-    data = await _gql(_INSERT, {"objects": payload}, role="finance_user", user_id=created_by, company_id=company_id)
+    data = await _gql(_INSERT, {"objects": payload}, user_id=created_by, company_id=company_id)
     return data["insert_invoices"]

@@ -1,7 +1,24 @@
 table:
   name: review_queue
   schema: public
+insert_permissions:
+  - role: ocr_service
+    permission:
+      check: {}
+      set:
+        company_id: X-Hasura-Company-Id
+      columns:
+        - invoice_draft
+        - issues
 select_permissions:
+  - role: ocr_service
+    # Not read directly — a select grant is what makes Hasura expose the
+    # `insert_review_queue_one(...) { id }` mutation at all (same rule as
+    # invoice_embeddings' genai_writer grant).
+    permission:
+      columns:
+        - id
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
   - role: finance_user
     permission:
       columns: "*"
@@ -24,4 +41,3 @@ update_permissions:
         - status
       filter: { company_id: { _eq: X-Hasura-Company-Id } }
       check: {}
-# Inserts come from ocr-service / ingestion-service with the admin secret.

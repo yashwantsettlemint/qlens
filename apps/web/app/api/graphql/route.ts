@@ -1,7 +1,8 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { graphql } from "graphql";
 import { makeExecutableSchema } from "@graphql-tools/schema";
 import { cookies } from "next/headers";
-import typeDefs from "@/graphql/schema.graphql";
 import { resolvers } from "@/server/resolvers";
 import { requestContext, SESSION_COOKIE } from "@/server/auth";
 import { verifyHS256, type Claims } from "@/server/jwt";
@@ -17,6 +18,7 @@ import { verifyHS256, type Claims } from "@/server/jwt";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const typeDefs = readFileSync(path.join(process.cwd(), "graphql/schema.graphql"), "utf8");
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 const JWT_SECRET = process.env.HASURA_GRAPHQL_JWT_SECRET ?? "";
 // Off by default so the stack is demoable with no auth service. Set REQUIRE_AUTH=1
@@ -39,7 +41,7 @@ export async function POST(req: Request) {
   }
 
   let claims: Claims | null = null;
-  const token = cookies().get(SESSION_COOKIE)?.value;
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (token) {
     claims = verifyHS256(token, JWT_SECRET);
     if (!claims) {

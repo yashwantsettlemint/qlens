@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from shared_types.auth import require_internal_token
 
 from . import ModelUnavailable
 from .config import MODEL_PATH
@@ -43,7 +44,7 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/models")
+@app.get("/models", dependencies=[Depends(require_internal_token)])
 def models(company_id: str) -> dict:
     """Technical details + accuracy/precision/recall for both models, scoped
     to one company (each reports whether it's that company's own trained
@@ -105,14 +106,14 @@ def _from_action(body: dict) -> dict:
     }
 
 
-@app.post("/score")
+@app.post("/score", dependencies=[Depends(require_internal_token)])
 async def score(body: dict) -> dict:
     inv = _from_event(body)
     direction, party_id = _party(inv)
     company_id = inv["company_id"]
     rescored: list[str] = []
     try:
-        siblings, paid_history = await fetch_context(party_id, inv.get("id"), direction)
+        siblings, paid_history = await fetch_context(party_id, inv.get("id"), company_id, direction)
         match = detect(inv, siblings, company_id)
         await write_duplicate_flag(inv["id"], company_id, match)
 
@@ -130,7 +131,7 @@ async def score(body: dict) -> dict:
             # ponytail: O(customer's open invoices) per payment; a nightly batch job
             # if one routinely carries hundreds open.
             if _payment_status_changed(body) and party_id:
-                for other in await fetch_open_invoices(party_id, direction):
+                for other in await fetch_open_invoices(party_id, company_id, direction):
                     if other["id"] == inv["id"]:
                         continue
                     await write_delay_prediction(
@@ -159,14 +160,14 @@ async def score(body: dict) -> dict:
     }
 
 
-@app.post("/check-duplicate")
+@app.post("/check-duplicate", dependencies=[Depends(require_internal_token)])
 async def check_duplicate(body: dict) -> dict:
     inv = _from_action(body)
     if not inv.get("company_id"):
         raise HTTPException(400, "action payload missing input.invoice.companyId")
     direction, party_id = _party(inv)
     try:
-        siblings, _ = await fetch_context(party_id, None, direction)
+        siblings, _ = await fetch_context(party_id, None, inv["company_id"], direction)
     except HasuraError as exc:
         raise HTTPException(502, f"Hasura error: {exc}")
     try:
@@ -183,7 +184,7 @@ async def check_duplicate(body: dict) -> dict:
     }
 
 
-@app.post("/drift/check")
+@app.post("/drift/check", dependencies=[Depends(require_internal_token)])
 async def drift_check(body: dict | None = None) -> dict:
     """Hasura cron-trigger target (ml_drift_check_daily) — no per-tenant
     context of its own, so it checks every company that has trained its own
@@ -203,12 +204,12 @@ async def drift_check(body: dict | None = None) -> dict:
     return reports
 
 
-@app.get("/drift")
+@app.get("/drift", dependencies=[Depends(require_internal_token)])
 async def drift_status(company_id: str) -> dict:
     return await fetch_latest_drift(company_id)
 
 
-@app.post("/retrain")
+@app.post("/retrain", dependencies=[Depends(require_internal_token)])
 async def retrain(body: dict) -> dict:
     from .retrain import retrain_model
 
@@ -221,6 +222,6 @@ async def retrain(body: dict) -> dict:
     return await retrain_model(model_name, triggered_by="manual", company_id=company_id)
 
 
-@app.get("/retrain-history")
+@app.get("/retrain-history", dependencies=[Depends(require_internal_token)])
 async def retrain_history(company_id: str, limit: int = 20) -> list[dict]:
     return await fetch_retrain_history(company_id, limit)

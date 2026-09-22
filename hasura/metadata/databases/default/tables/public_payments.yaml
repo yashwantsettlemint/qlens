@@ -31,6 +31,14 @@ select_permissions:
       columns: "*"
       filter: { company_id: { _eq: X-Hasura-Company-Id } }
       allow_aggregations: true
+  - role: ml_service
+    # Needed only for the nested `payments` relationship under `invoices` in
+    # ml-service's context query (paid-on-time history).
+    permission:
+      columns:
+        - invoice_id
+        - paid_at
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
 update_permissions:
   - role: finance_user
     permission:

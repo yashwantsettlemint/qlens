@@ -81,7 +81,6 @@ services:
     env_file: [.env]
     environment:
       HASURA_ENDPOINT: http://hasura:8080/v1/graphql
-      HASURA_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-devsecret}
     ports:
       # host 8091 to dodge a local service on 8001; container listens on 8001
       - "8091:8001"
@@ -102,7 +101,6 @@ services:
     env_file: [.env]
     environment:
       HASURA_ENDPOINT: http://hasura:8080/v1/graphql
-      HASURA_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-devsecret}
     ports:
       - "8092:8002"
     volumes:
@@ -116,7 +114,7 @@ services:
       <<: *pyhealth
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\""]
 
-  genai-service:  # reads Hasura as genai_readonly; /embed alone uses the admin secret to write invoice_embeddings
+  genai-service:  # reads Hasura as genai_readonly; /embed as genai_writer (both self-minted JWTs)
     build:
       context: ..
       dockerfile: services/genai-service/Dockerfile
@@ -124,7 +122,6 @@ services:
     env_file: [.env]
     environment:
       HASURA_ENDPOINT: http://hasura:8080/v1/graphql
-      HASURA_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-devsecret}  # /embed write path only
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
       # the model is baked into the image at build time (see Dockerfile) — skip
       # the HF Hub freshness check so a network hiccup can't stall/retry every
@@ -147,7 +144,6 @@ services:
     env_file: [.env]
     environment:
       HASURA_ENDPOINT: http://hasura:8080/v1/graphql
-      HASURA_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-devsecret}
     ports:
       - "8094:8004"
     depends_on:
@@ -172,7 +168,7 @@ services:
       <<: *pyhealth
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8005/health')\""]
 
-  ocr-service:  # CPU OCR + field extraction; writes invalid drafts to review_queue (admin)
+  ocr-service:  # CPU OCR + field extraction; writes invalid drafts to review_queue (as ocr_service)
     build:
       context: ..
       dockerfile: services/ocr-service/Dockerfile
@@ -180,7 +176,6 @@ services:
     env_file: [.env]
     environment:
       HASURA_ENDPOINT: http://hasura:8080/v1/graphql
-      HASURA_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-devsecret}
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     ports:
       # host 8096; container 8006 (the 6th service, past the brief's 8001-8005)

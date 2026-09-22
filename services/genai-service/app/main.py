@@ -15,8 +15,9 @@ full invoice context and write invoice_embeddings.
 
 from __future__ import annotations
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
+from shared_types.auth import require_internal_token
 
 from . import chunking, config, embedding, llm, ocr, rag
 from .hasura import (
@@ -63,7 +64,7 @@ def health() -> dict:
     return {"status": "ok", "llm": provider}
 
 
-@app.post("/summarize")
+@app.post("/summarize", dependencies=[Depends(require_internal_token)])
 async def summarize(req: SummarizeRequest) -> dict:
     try:
         res = await rag.answer_structured(req.question, req.company_id)
@@ -86,7 +87,7 @@ async def summarize(req: SummarizeRequest) -> dict:
     }
 
 
-@app.post("/query")
+@app.post("/query", dependencies=[Depends(require_internal_token)])
 async def query(req: QueryRequest) -> dict:
     """Hybrid router — structured (exact, from Postgres) and/or semantic
     (pgvector similarity), merged into one answer."""
@@ -125,7 +126,7 @@ async def _embed_one(invoice_id: str) -> dict:
     }
 
 
-@app.post("/embed")
+@app.post("/embed", dependencies=[Depends(require_internal_token)])
 async def embed_invoice(body: dict) -> dict:
     """Hasura event-trigger target (invoices INSERT/UPDATE). Also callable
     manually as {"invoice_id": "..."}. Returns 200 for 'skip'/'failed' so
@@ -138,7 +139,7 @@ async def embed_invoice(body: dict) -> dict:
     return result
 
 
-@app.post("/embed/backfill")
+@app.post("/embed/backfill", dependencies=[Depends(require_internal_token)])
 async def embed_backfill() -> dict:
     """Re-embeds every invoice — catches up anything the event trigger missed
     (seed data inserted before this service was healthy, or the embedding
@@ -171,7 +172,7 @@ async def embed_backfill() -> dict:
     return {"total": len(ids), "embedded": embedded, "skipped": skipped, "failed": failed, "reasons": reasons}
 
 
-@app.post("/explain-duplicate")
+@app.post("/explain-duplicate", dependencies=[Depends(require_internal_token)])
 async def explain_duplicate(req: ExplainRequest) -> dict:
     try:
         ctx = await fetch_duplicate_context(req.invoice_id, req.company_id)
@@ -189,7 +190,7 @@ async def explain_duplicate(req: ExplainRequest) -> dict:
     }
 
 
-@app.post("/summarize-invoice")
+@app.post("/summarize-invoice", dependencies=[Depends(require_internal_token)])
 async def summarize_invoice(req: InvoiceSummaryRequest) -> dict:
     try:
         inv = await fetch_invoice_summary_context(req.invoice_id, req.company_id)
@@ -200,7 +201,7 @@ async def summarize_invoice(req: InvoiceSummaryRequest) -> dict:
     return {"summary": llm.summarise_invoice(inv)}
 
 
-@app.post("/extract-ocr")
+@app.post("/extract-ocr", dependencies=[Depends(require_internal_token)])
 async def extract_ocr(file: UploadFile = File(...)) -> dict:
     """Read invoice fields from an uploaded PDF's text layer (LLM, or offline
     regex). Image / scanned PDFs have no text layer and get a pending-review

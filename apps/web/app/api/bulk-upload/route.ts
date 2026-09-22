@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { verifyHS256, type Claims } from "@/server/jwt";
 import { SESSION_COOKIE } from "@/server/auth";
+import { internalServiceHeaders } from "@/server/hasura";
 
 /**
  * BFF: proxies a multi-file document upload to ocr-service's RabbitMQ-backed
@@ -22,9 +23,9 @@ const DEMO_COMPANY_ID = "00000000-0000-0000-0000-000000000001";
 
 const fail = (status: number, message: string) => Response.json({ error: message }, { status });
 
-function checkAuth(): { error: Response | null; claims: Claims | null } {
+async function checkAuth(): Promise<{ error: Response | null; claims: Claims | null }> {
   let claims: Claims | null = null;
-  const token = cookies().get(SESSION_COOKIE)?.value;
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (token) {
     claims = verifyHS256(token, JWT_SECRET);
     if (!claims) return { error: fail(401, "Your session has expired — sign in again."), claims: null };
@@ -40,7 +41,7 @@ function checkAuth(): { error: Response | null; claims: Claims | null } {
 }
 
 export async function POST(req: Request) {
-  const { error, claims } = checkAuth();
+  const { error, claims } = await checkAuth();
   if (error) return error;
 
   let form: FormData;
@@ -61,7 +62,7 @@ export async function POST(req: Request) {
 
   let resp: Response;
   try {
-    resp = await fetch(`${OCR_URL}/bulk/enqueue`, { method: "POST", body: out });
+    resp = await fetch(`${OCR_URL}/bulk/enqueue`, { method: "POST", headers: internalServiceHeaders(), body: out });
   } catch {
     return fail(502, "ocr-service is unreachable — is the stack up?");
   }
@@ -71,7 +72,7 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
-  const { error } = checkAuth();
+  const { error } = await checkAuth();
   if (error) return error;
 
   const ids = new URL(req.url).searchParams.get("ids");
@@ -79,7 +80,9 @@ export async function GET(req: Request) {
 
   let resp: Response;
   try {
-    resp = await fetch(`${OCR_URL}/bulk/status?ids=${encodeURIComponent(ids)}`);
+    resp = await fetch(`${OCR_URL}/bulk/status?ids=${encodeURIComponent(ids)}`, {
+      headers: internalServiceHeaders(),
+    });
   } catch {
     return fail(502, "ocr-service is unreachable — is the stack up?");
   }

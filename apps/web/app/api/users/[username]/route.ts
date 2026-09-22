@@ -9,8 +9,9 @@ const JWT_SECRET = process.env.HASURA_GRAPHQL_JWT_SECRET ?? "";
 
 const fail = (status: number, message: string) => Response.json({ error: message }, { status });
 
-export async function PATCH(req: Request, { params }: { params: { username: string } }) {
-  const token = cookies().get(SESSION_COOKIE)?.value;
+export async function PATCH(req: Request, props: { params: Promise<{ username: string }> }) {
+  const params = await props.params;
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return fail(401, "Sign in as admin to manage users.");
   const claims = verifyHS256(token, JWT_SECRET);
   if (!claims) return fail(401, "Your session has expired — sign in again.");

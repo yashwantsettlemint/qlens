@@ -12,8 +12,8 @@ const JWT_SECRET = process.env.HASURA_GRAPHQL_JWT_SECRET ?? "";
 
 const fail = (status: number, message: string) => Response.json({ error: message }, { status });
 
-function requireAdmin(): { error: Response | null; token: string | null } {
-  const token = cookies().get(SESSION_COOKIE)?.value;
+async function requireAdmin(): Promise<{ error: Response | null; token: string | null }> {
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return { error: fail(401, "Sign in as admin to manage users."), token: null };
   const claims = verifyHS256(token, JWT_SECRET);
   if (!claims) return { error: fail(401, "Your session has expired — sign in again."), token: null };
@@ -22,7 +22,7 @@ function requireAdmin(): { error: Response | null; token: string | null } {
 }
 
 export async function GET() {
-  const { error, token } = requireAdmin();
+  const { error, token } = await requireAdmin();
   if (error) return error;
 
   const res = await fetch(`${AUTH_URL}/users`, { headers: { authorization: `Bearer ${token}` } });
@@ -31,7 +31,7 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const { error, token } = requireAdmin();
+  const { error, token } = await requireAdmin();
   if (error) return error;
 
   const payload = await req.json();

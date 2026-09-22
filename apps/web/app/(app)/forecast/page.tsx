@@ -62,7 +62,7 @@ export default function ForecastPage() {
             <Panel className="mb-6" title="Delay risk">
               <p className="mb-2 text-xs text-ink-muted">
                 Open receivables, bucketed by predicted late-payment risk — the same model
-                that shifts the inflow windows above off their due dates. (Payables aren't
+                that shifts the inflow windows above off their due dates. (Payables aren&apos;t
                 scored: when we pay a vendor is our own call, not a prediction.)
               </p>
               <QueryState
@@ -76,7 +76,7 @@ export default function ForecastPage() {
 
             <Panel className="mb-6" title="Customer exposure & delay risk">
               <p className="mb-2 text-xs text-ink-muted">
-                Outstanding receivable per customer, coloured by that customer's average
+                Outstanding receivable per customer, coloured by that customer&apos;s average
                 predicted late-payment risk.
               </p>
               <QueryState

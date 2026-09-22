@@ -1,5 +1,36 @@
 table:
   name: ml_retrain_events
   schema: public
-# Admin-only, read and written through the BFF/ml-service with the admin
-# secret (same as company_settings) — no per-role permissions needed here.
+insert_permissions:
+  - role: ml_service
+    permission:
+      check: {}
+      set:
+        company_id: X-Hasura-Company-Id
+      columns:
+        - model_name
+        - triggered_by
+        - status
+        - old_version
+        - new_version
+        - old_metrics
+        - new_metrics
+        - error
+select_permissions:
+  - role: ml_service
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+update_permissions:
+  - role: ml_service
+    permission:
+      columns:
+        - finished_at
+        - status
+        - old_version
+        - new_version
+        - old_metrics
+        - new_metrics
+        - error
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      check: {}

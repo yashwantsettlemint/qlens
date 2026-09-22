@@ -11,8 +11,9 @@ import logging
 import os
 from datetime import date, datetime, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
+from shared_types.auth import require_internal_token
 
 from .hasura import HasuraError, find_past_due, mark_overdue
 from .notify import format_digest, get_notifier, send_direct_email
@@ -49,7 +50,7 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/overdue-sweep")
+@app.post("/overdue-sweep", dependencies=[Depends(require_internal_token)])
 async def overdue_sweep() -> dict:
     today = date.today().isoformat()
     try:
@@ -92,7 +93,7 @@ async def overdue_sweep() -> dict:
     }
 
 
-@app.post("/notify/payment-received")
+@app.post("/notify/payment-received", dependencies=[Depends(require_internal_token)])
 async def notify_payment_received(req: PaymentReceivedRequest) -> dict:
     """Best-effort receipt confirmation to a customer once their payment on a
     receivable invoice is recorded. Called synchronously from the web BFF's
@@ -110,7 +111,7 @@ async def notify_payment_received(req: PaymentReceivedRequest) -> dict:
     return {"sent": sent}
 
 
-@app.post("/notify/send-invoice")
+@app.post("/notify/send-invoice", dependencies=[Depends(require_internal_token)])
 async def notify_send_invoice(req: SendInvoiceRequest) -> dict:
     """Sends a generated invoice PDF to a customer. Called synchronously from
     the web BFF's generateAndSendInvoice mutation — never blocks or fails
@@ -129,7 +130,7 @@ async def notify_send_invoice(req: SendInvoiceRequest) -> dict:
     return {"sent": sent}
 
 
-@app.post("/notify/demo-request")
+@app.post("/notify/demo-request", dependencies=[Depends(require_internal_token)])
 async def notify_demo_request(req: DemoRequest) -> dict:
     """A prospect submitted the landing page's "Book a demo" form: notifies the
     ops inbox (EMAIL_TO, same recipient as the overdue digest) and sends the

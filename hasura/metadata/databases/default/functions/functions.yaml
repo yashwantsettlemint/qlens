@@ -10,4 +10,5 @@
     schema: public
   configuration:
     exposed_as: mutation
-  # admin-only (built-in) — genai-service /embed calls this with the admin secret
+  permissions:
+    - role: genai_writer
