@@ -59,24 +59,8 @@ async def run_writer(query: str, variables: dict, company_id: str = _NO_COMPANY)
     return await _post(query, variables, _headers(GENAI_WRITER_ROLE, company_id))
 
 
-# ---- RAG: semantic search (genai_readonly) + embed write (admin) --------------
-
-_MATCH = """
-query Match($v: String!, $k: Int!, $c: uuid!) {
-  match_invoice_embeddings(args: {query_embedding: $v, match_count: $k, for_company_id: $c}) {
-    invoice_id
-    chunk_text
-    similarity
-    chunk_index
-  }
-}
-"""
-
-
-async def match_embeddings(vec_literal: str, company_id: str, k: int = 5) -> list[dict]:
-    data = await run_query(_MATCH, {"v": vec_literal, "k": k, "c": company_id}, company_id)
-    return data["match_invoice_embeddings"]
-
+# ---- RAG: semantic search + embed write now live in .db (genai_db, direct
+# psycopg — see db.py's module docstring for why this moved off Hasura).
 
 _INVOICE_FULL = """
 query InvoiceForEmbedding($id: uuid!) {
@@ -131,41 +115,11 @@ async def fetch_invoice_full(invoice_id: str) -> dict | None:
     return data.get("invoices_by_pk")
 
 
-_CLEAR_CHUNKS = """
-mutation ClearChunks($id: uuid!) {
-  delete_invoice_embeddings(where: {invoice_id: {_eq: $id}}) { affected_rows }
-}
-"""
-
-_UPSERT = """
-mutation UpsertEmbedding($id: uuid!, $i: Int!, $t: String!, $e: String!, $c: uuid!) {
-  upsert_invoice_embedding(
-    args: {p_invoice_id: $id, p_chunk_index: $i, p_chunk_text: $t, p_embedding: $e, p_company_id: $c}
-  ) {
-    invoice_id
-  }
-}
-"""
-
-
-async def replace_embeddings(invoice_id: str, chunks: list[tuple[str, str]], company_id: str) -> None:
-    """Replaces every embedding row for this invoice with `chunks`
-    (chunk_text, vec_literal pairs, in order) — always a clean delete + fresh
-    insert rather than incremental upsert, so a re-embed that produces fewer
-    chunks than last time doesn't leave stale rows behind."""
-    await run_writer(_CLEAR_CHUNKS, {"id": invoice_id}, company_id)
-    for i, (chunk_text, vec_literal) in enumerate(chunks):
-        await run_writer(
-            _UPSERT, {"id": invoice_id, "i": i, "t": chunk_text, "e": vec_literal, "c": company_id}, company_id
-        )
-
-
 _EXPLAIN = """
 query DupContext($id: uuid!) {
   invoices_by_pk(id: $id) {
     id invoice_number amount tax_amount invoice_date department
     vendor { name }
-    duplicateFlag { confidence_score method reviewed_status matched_invoice_id }
   }
 }
 """
@@ -180,11 +134,17 @@ query Matched($id: uuid!) {
 
 
 async def fetch_duplicate_context(invoice_id: str, company_id: str) -> dict | None:
+    from . import ml_client  # local import: only /explain-duplicate needs this
+
     data = await run_query(_EXPLAIN, {"id": invoice_id}, company_id)
     inv = data.get("invoices_by_pk")
-    if not inv or not inv.get("duplicateFlag"):
+    if not inv:
         return None
-    matched_id = inv["duplicateFlag"]["matched_invoice_id"]
+    flag = await ml_client.get_duplicate_flag(invoice_id, company_id)
+    if not flag:
+        return None
+    inv["duplicateFlag"] = flag
+    matched_id = flag["matched_invoice_id"]
     matched = (
         (await run_query(_MATCHED, {"id": matched_id}, company_id)).get("invoices_by_pk") if matched_id else None
     )

@@ -1,0 +1,3 @@
+table:
+  name: ml_retrain_events
+  schema: public

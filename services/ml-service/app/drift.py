@@ -23,7 +23,7 @@ from datetime import date, datetime, timezone
 
 import numpy as np
 
-from . import hasura
+from . import db, hasura
 from .config import PERFORMANCE_DROP_THRESHOLD, PSI_THRESHOLD
 from .duplicates import _load_model as _load_duplicate_model
 from .delay import _load_model as _load_delay_model
@@ -185,7 +185,7 @@ async def check_all_drift(auto_retrain: bool, company_id: str) -> dict:
     reports = {}
     for model_name in ("duplicate", "delay"):
         report = await check_drift(model_name, company_id)
-        await hasura.insert_drift_report(report, company_id)
+        await db.insert_drift_report(report, company_id)
         reports[model_name] = report
         if auto_retrain and report["drift_detected"]:
             reports[model_name]["retrain"] = await retrain_module.retrain_model(

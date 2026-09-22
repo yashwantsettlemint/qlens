@@ -29,3 +29,44 @@
         retries: 1
       use_prepared_statements: true
   tables: "!include ocr/tables/tables.yaml"
+# genai-service's private database (invoice_embeddings) — tracked here for
+# console visibility/browsing only. No permissions are granted to any role
+# (mirrors public_audit_logs.yaml's pattern), so it stays admin-secret-only:
+# genai-service keeps exclusive read/write access via its own direct
+# connection (services/genai-service/app/db.py), not through this source.
+- name: genai
+  kind: postgres
+  configuration:
+    connection_info:
+      database_url:
+        from_env: GENAI_PG_DATABASE_URL
+      isolation_level: read-committed
+      pool_settings:
+        idle_timeout: 180
+        max_connections: 10
+        retries: 1
+      use_prepared_statements: true
+  tables: "!include genai/tables/tables.yaml"
+  # match_invoice_embeddings/upsert_invoice_embedding aren't tracked here —
+  # they return an inline RETURNS TABLE(...) shape, which Hasura can't track
+  # (it needs a real composite type or SETOF a table). genai-service already
+  # calls them directly over psycopg (services/genai-service/app/db.py); this
+  # source exists for browsing invoice_embeddings in the console, not for
+  # exposing these functions.
+# ml-service's private database (duplicate_flags, delay_predictions,
+# ml_drift_reports, ml_retrain_events) — same admin-only visibility pattern
+# as `genai` above. ml-service keeps exclusive access via
+# services/ml-service/app/db.py.
+- name: ml
+  kind: postgres
+  configuration:
+    connection_info:
+      database_url:
+        from_env: ML_PG_DATABASE_URL
+      isolation_level: read-committed
+      pool_settings:
+        idle_timeout: 180
+        max_connections: 10
+        retries: 1
+      use_prepared_statements: true
+  tables: "!include ml/tables/tables.yaml"

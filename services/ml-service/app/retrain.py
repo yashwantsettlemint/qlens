@@ -12,7 +12,7 @@ import asyncio
 import functools
 from datetime import datetime, timezone
 
-from . import hasura
+from . import db
 from .delay import _load_model as _load_delay_model
 from .delay import model_info as delay_model_info
 from .duplicates import _load_model as _load_duplicate_model
@@ -33,7 +33,7 @@ async def retrain_model(model_name: str, triggered_by: str, company_id: str) -> 
         raise ValueError(f"unknown model_name {model_name!r}")
 
     old_info = delay_model_info(company_id) if model_name == "delay" else duplicate_model_info(company_id)
-    event_id = await hasura.insert_retrain_event(
+    event_id = await db.insert_retrain_event(
         {
             "model_name": model_name,
             "triggered_by": triggered_by,
@@ -55,14 +55,14 @@ async def retrain_model(model_name: str, triggered_by: str, company_id: str) -> 
             None, functools.partial(trainer, "hasura", company_id=company_id)
         )
     except SystemExit as exc:
-        await hasura.update_retrain_event(event_id, {
+        await db.update_retrain_event(event_id, {
             "status": "skipped_insufficient_data",
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "error": str(exc),
         }, company_id)
         return {"status": "skipped_insufficient_data", "detail": str(exc), "event_id": event_id}
     except Exception as exc:
-        await hasura.update_retrain_event(event_id, {
+        await db.update_retrain_event(event_id, {
             "status": "failed",
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "error": str(exc),
@@ -74,7 +74,7 @@ async def retrain_model(model_name: str, triggered_by: str, company_id: str) -> 
     # little wasteful. Fine at this call frequency.
     (_load_delay_model if model_name == "delay" else _load_duplicate_model).cache_clear()
 
-    await hasura.update_retrain_event(event_id, {
+    await db.update_retrain_event(event_id, {
         "status": "succeeded",
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "new_version": result["version"],

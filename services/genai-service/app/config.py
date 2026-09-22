@@ -5,6 +5,12 @@ HASURA_ENDPOINT = (
     or os.getenv("HASURA_GRAPHQL_ENDPOINT")
     or "http://localhost:8088/v1/graphql"
 )
+
+# /explain-duplicate's only call to another Python service (not Hasura) —
+# duplicate_flags now lives privately in ml-service's own ml_db, see
+# services/ml-service/app/db.py.
+ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://localhost:8092")
+INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "")
 # genai-service authenticates as genai_readonly for reads and genai_writer
 # for /embed + /embed/backfill (see hasura/metadata's genai_writer role) —
 # both self-minted JWTs, never the admin secret.

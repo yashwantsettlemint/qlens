@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
@@ -15,11 +16,17 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 from shared_types.auth import require_internal_token
 
+from . import queue as outbound_queue
 from .hasura import HasuraError, find_past_due, mark_overdue
 from .notify import format_digest, get_notifier, send_direct_email
 
 logging.basicConfig(level=logging.INFO)
 app = FastAPI(title="notification-service", version="0.1.0")
+
+
+@app.on_event("startup")
+async def _start_outbound_consumer() -> None:
+    asyncio.create_task(outbound_queue.start_consumer())
 
 
 class PaymentReceivedRequest(BaseModel):

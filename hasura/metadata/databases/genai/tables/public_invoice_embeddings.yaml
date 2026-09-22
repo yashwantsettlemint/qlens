@@ -1,0 +1,3 @@
+table:
+  name: invoice_embeddings
+  schema: public

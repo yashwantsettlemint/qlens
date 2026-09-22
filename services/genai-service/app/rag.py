@@ -11,7 +11,8 @@ easy to spot; a wrong semantic guess presented as fact is not.
 from __future__ import annotations
 
 from . import config, embedding, llm
-from .hasura import HasuraError, match_embeddings, run_query
+from .db import EmbeddingStoreError, match_embeddings
+from .hasura import HasuraError, run_query
 from .query_builder import build, route_offline, spec_from_tool_args
 from .whitelist import NotAllowed
 
@@ -129,7 +130,7 @@ async def _safe_semantic(question: str, company_id: str, top_k: int = 5) -> list
         # chunks — over-fetch raw chunk matches, then keep each invoice's
         # single best-scoring chunk, so results are still top_k *invoices*.
         raw = await match_embeddings(embedding.vector_literal(vec), company_id, top_k * 4)
-    except HasuraError:
+    except EmbeddingStoreError:
         return None
     best_by_invoice: dict[str, dict] = {}
     for m in raw:

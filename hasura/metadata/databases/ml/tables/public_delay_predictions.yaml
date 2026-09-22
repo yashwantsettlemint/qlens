@@ -1,0 +1,3 @@
+table:
+  name: delay_predictions
+  schema: public

@@ -23,6 +23,7 @@ services:
       retries: 12
 
   rabbitmq:  # queue for ocr-service's bulk document upload (POST /bulk/enqueue)
+             # and notification-service's outbound email delivery (notify.outbound)
     image: rabbitmq:3.13-management-alpine
     restart: unless-stopped
     ports:
@@ -144,10 +145,13 @@ services:
     env_file: [.env]
     environment:
       HASURA_ENDPOINT: http://hasura:8080/v1/graphql
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     ports:
       - "8094:8004"
     depends_on:
       hasura:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     healthcheck:
       <<: *pyhealth
@@ -189,6 +193,37 @@ services:
       <<: *pyhealth
       # first request can be slow (PP-StructureV3 model load); generous start
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8006/health')\""]
+      retries: 12
+
+  web:  # Next.js BFF — the actual frontend; talks to Hasura + genai/ml/notification/ocr server-side
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      args:
+        # NEXT_PUBLIC_* vars are inlined at build time (see Dockerfile) — a
+        # runtime `environment:` override below would have no effect on this one.
+        NEXT_PUBLIC_AUTH_URL: http://auth-service:8005
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      # env_file's HASURA_ENDPOINT is the host-facing localhost default (used
+      # by local tooling outside docker) — every service overrides it the
+      # same way for container-to-container calls.
+      HASURA_ENDPOINT: http://hasura:8080/v1/graphql
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    ports:
+      # host 3002 — 3000/3001 are commonly taken by a local `next dev` or another
+      # tool; container still listens on 3000.
+      - "3002:3000"
+    depends_on:
+      hasura:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/',r=>process.exit(0)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
       retries: 12
 
 volumes:

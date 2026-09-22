@@ -58,30 +58,51 @@ def _matrix(df: pd.DataFrame) -> np.ndarray:
 
 
 async def _load_from_hasura(company_id: str) -> pd.DataFrame:
+    """duplicate_flags now lives in this service's own ml_db (app.db), not
+    Hasura — reviewed rows come from there directly. The invoice/matchedInvoice
+    field data those rows used to pull via a Hasura relationship join still
+    lives in the shared invoices table, so that part is a second, batched
+    Hasura query (one $in lookup for every invoice id involved, not one call
+    per row) — same two-step "fetch from ml_db, then batch-enrich from
+    Hasura" pattern as apps/web/server's invoice-list stitching."""
+    from app.db import get_conn
     from app.hasura import _gql
 
-    query = """
-    query Reviewed($companyId: uuid!) {
-      duplicate_flags(
-        where: {reviewed_status: {_in: ["confirmed_duplicate", "false_positive"]}, company_id: {_eq: $companyId}}
-      ) {
-        reviewed_status
-        invoice        { invoice_number amount tax_amount po_id invoice_date department }
-        matchedInvoice { invoice_number amount tax_amount po_id invoice_date department }
-      }
-    }
-    """
-    data = await _gql(query, {"companyId": company_id}, company_id)
+    async with await get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """SELECT invoice_id, matched_invoice_id, reviewed_status
+                   FROM duplicate_flags
+                   WHERE company_id = %s AND reviewed_status = ANY(%s)""",
+                (company_id, ["confirmed_duplicate", "false_positive"]),
+            )
+            flags = await cur.fetchall()
+
+    ids = sorted({str(f["invoice_id"]) for f in flags} | {str(f["matched_invoice_id"]) for f in flags})
+    invoices_by_id: dict[str, dict] = {}
+    if ids:
+        query = """
+        query Invoices($ids: [uuid!]!) {
+          invoices(where: {id: {_in: $ids}}) {
+            id invoice_number amount tax_amount po_id invoice_date department
+          }
+        }
+        """
+        data = await _gql(query, {"ids": ids}, company_id)
+        invoices_by_id = {row["id"]: row for row in data["invoices"]}
+
     records = []
-    for row in data["duplicate_flags"]:
-        a, b = row.get("invoice"), row.get("matchedInvoice")
+    for flag in flags:
+        a = invoices_by_id.get(str(flag["invoice_id"]))
+        b = invoices_by_id.get(str(flag["matched_invoice_id"]))
         if not a or not b:
             continue
+        fields = ("invoice_number", "amount", "tax_amount", "po_id", "invoice_date", "department")
         records.append(
             {
-                **{f"a_{k}": a[k] for k in a},
-                **{f"b_{k}": b[k] for k in b},
-                "is_duplicate": 1 if row["reviewed_status"] == "confirmed_duplicate" else 0,
+                **{f"a_{k}": a[k] for k in fields},
+                **{f"b_{k}": b[k] for k in fields},
+                "is_duplicate": 1 if flag["reviewed_status"] == "confirmed_duplicate" else 0,
             }
         )
     if len(records) < 40 or len(set(r["is_duplicate"] for r in records)) < 2:

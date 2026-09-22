@@ -1,0 +1,3 @@
+table:
+  name: duplicate_flags
+  schema: public

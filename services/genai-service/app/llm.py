@@ -17,7 +17,7 @@ _SUMMARISE_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "table": {"type": "string", "enum": ["invoices", "vendors", "duplicate_flags", "delay_predictions"]},
+                "table": {"type": "string", "enum": ["invoices", "vendors"]},
                 "where": {
                     "type": "object",
                     "description": (

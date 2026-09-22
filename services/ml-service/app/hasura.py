@@ -1,7 +1,8 @@
 """Hasura access for ml-service. Reads context (vendor's other invoices, vendor
-payment history) and writes results back to duplicate_flags / delay_predictions
-as `ml_service` — a company-scoped role, self-minted per call (see
-hasura/metadata's ml_service permissions), not the admin secret.
+payment history) as `ml_service` — a company-scoped role, self-minted per call
+(see hasura/metadata's ml_service permissions), not the admin secret.
+duplicate_flags/delay_predictions/ml_drift_reports/ml_retrain_events all now
+live in this service's own private database — see db.py.
 """
 
 from __future__ import annotations
@@ -88,62 +89,8 @@ async def fetch_open_invoices(party_id: str, company_id: str, direction: str = "
     return (await _gql(query, {"partyId": party_id}, company_id))["invoices"]
 
 
-_WRITE_DUP = """
-mutation WriteDup($invoiceId: uuid!, $obj: [duplicate_flags_insert_input!]!) {
-  delete_duplicate_flags(where: {invoice_id: {_eq: $invoiceId}, reviewed_status: {_eq: "unreviewed"}}) {
-    affected_rows
-  }
-  insert_duplicate_flags(objects: $obj) { affected_rows }
-}
-"""
-
-_WRITE_DELAY = """
-mutation WriteDelay($invoiceId: uuid!, $obj: delay_predictions_insert_input!) {
-  delete_delay_predictions(where: {invoice_id: {_eq: $invoiceId}}) { affected_rows }
-  insert_delay_predictions_one(object: $obj) { id }
-}
-"""
-
-
-async def write_duplicate_flag(invoice_id: str, company_id: str, match) -> None:
-    obj = (
-        [{
-            "invoice_id": invoice_id,
-            # company_id is NOT sent here — it's forced server-side by the
-            # ml_service role's insert `set` preset (a column in `set` isn't
-            # a valid field on the generated *_insert_input type at all).
-            "matched_invoice_id": match.matched_invoice_id,
-            "confidence_score": match.confidence_score,
-            "method": match.method,
-            "reviewed_status": "unreviewed",
-            "reason": match.reason,
-            # jsonb GraphQL variables take the JSON value directly — json.dumps()
-            # here would double-encode it into a jsonb *string*, not an array,
-            # breaking every reader that expects a list (e.g. GraphQL clients).
-            "explanation": match.explanation,
-        }]
-        if match
-        else []
-    )
-    await _gql(_WRITE_DUP, {"invoiceId": invoice_id, "obj": obj}, company_id)
-
-
-async def write_delay_prediction(invoice_id: str, company_id: str, prediction: dict) -> None:
-    await _gql(
-        _WRITE_DELAY,
-        {
-            "invoiceId": invoice_id,
-            "obj": {
-                "invoice_id": invoice_id,
-                "delay_probability": prediction["delay_probability"],
-                "predicted_delay_days": prediction["predicted_delay_days"],
-                "model_version": prediction["model_version"],
-                "explanation": prediction.get("explanation") or [],
-            },
-        },
-        company_id,
-    )
-
+# duplicate_flags / delay_predictions writes now live in .db (ml_db, direct
+# psycopg — see db.py's module docstring for why this moved off Hasura).
 
 # --- drift / retrain support -------------------------------------------------
 
@@ -166,75 +113,5 @@ async def fetch_recent_invoices(company_id: str, limit: int = 500) -> list[dict]
     return data["invoices"]
 
 
-_INSERT_DRIFT = """
-mutation InsertDrift($obj: ml_drift_reports_insert_input!) {
-  insert_ml_drift_reports_one(object: $obj) { id }
-}
-"""
-
-
-async def insert_drift_report(report: dict, company_id: str) -> None:
-    # company_id isn't sent in `report` — it's forced server-side by the
-    # ml_service role's insert `set` preset.
-    await _gql(_INSERT_DRIFT, {"obj": report}, company_id)
-
-
-_INSERT_RETRAIN = """
-mutation InsertRetrain($obj: ml_retrain_events_insert_input!) {
-  insert_ml_retrain_events_one(object: $obj) { id }
-}
-"""
-
-_UPDATE_RETRAIN = """
-mutation UpdateRetrain($id: uuid!, $set: ml_retrain_events_set_input!) {
-  update_ml_retrain_events_by_pk(pk_columns: {id: $id}, _set: $set) { id }
-}
-"""
-
-
-async def insert_retrain_event(event: dict, company_id: str) -> str:
-    # company_id isn't sent in `event` — it's forced server-side by the
-    # ml_service role's insert `set` preset.
-    data = await _gql(_INSERT_RETRAIN, {"obj": event}, company_id)
-    return data["insert_ml_retrain_events_one"]["id"]
-
-
-async def update_retrain_event(event_id: str, patch: dict, company_id: str) -> None:
-    await _gql(_UPDATE_RETRAIN, {"id": event_id, "set": patch}, company_id)
-
-
-_LATEST_DRIFT = """
-query LatestDrift($companyId: uuid!) {
-  duplicate: ml_drift_reports(
-    where: {model_name: {_eq: "duplicate"}, company_id: {_eq: $companyId}}, order_by: {checked_at: desc}, limit: 1
-  ) { model_name checked_at drift_detected feature_psi rolling_metrics baseline_metrics notes }
-  delay: ml_drift_reports(
-    where: {model_name: {_eq: "delay"}, company_id: {_eq: $companyId}}, order_by: {checked_at: desc}, limit: 1
-  ) { model_name checked_at drift_detected feature_psi rolling_metrics baseline_metrics notes }
-}
-"""
-
-
-async def fetch_latest_drift(company_id: str) -> dict:
-    data = await _gql(_LATEST_DRIFT, {"companyId": company_id}, company_id)
-    return {
-        "duplicate": (data["duplicate"] or [None])[0],
-        "delay": (data["delay"] or [None])[0],
-    }
-
-
-_RETRAIN_HISTORY = """
-query RetrainHistory($limit: Int!, $companyId: uuid!) {
-  ml_retrain_events(
-    where: {company_id: {_eq: $companyId}}, order_by: {started_at: desc}, limit: $limit
-  ) {
-    id model_name triggered_by started_at finished_at status
-    old_version new_version old_metrics new_metrics error
-  }
-}
-"""
-
-
-async def fetch_retrain_history(company_id: str, limit: int = 20) -> list[dict]:
-    data = await _gql(_RETRAIN_HISTORY, {"limit": limit, "companyId": company_id}, company_id)
-    return data["ml_retrain_events"]
+# ml_drift_reports / ml_retrain_events now live in .db (ml_db, direct psycopg
+# — see db.py's module docstring for why this moved off Hasura).

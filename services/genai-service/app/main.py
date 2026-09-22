@@ -15,18 +15,19 @@ full invoice context and write invoice_embeddings.
 
 from __future__ import annotations
 
+import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from shared_types.auth import require_internal_token
 
 from . import chunking, config, embedding, llm, ocr, rag
+from .db import replace_embeddings
 from .hasura import (
     HasuraError,
     fetch_duplicate_context,
     fetch_invoice_full,
     fetch_invoice_summary_context,
     list_invoice_ids,
-    replace_embeddings,
 )
 from .whitelist import NotAllowed
 
@@ -178,6 +179,8 @@ async def explain_duplicate(req: ExplainRequest) -> dict:
         ctx = await fetch_duplicate_context(req.invoice_id, req.company_id)
     except HasuraError as exc:
         raise HTTPException(502, f"Hasura error (as genai_readonly): {exc}")
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"ml-service error: {exc}")
     if ctx is None:
         raise HTTPException(404, "no duplicate flag on that invoice (nothing to explain)")
     flag = ctx["invoice"]["duplicateFlag"]

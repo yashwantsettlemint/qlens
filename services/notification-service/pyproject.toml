@@ -9,6 +9,7 @@ dependencies = [
   "httpx>=0.27",
   "invoice-tracker-shared-types",
   "pydantic>=2",
+  "aio-pika>=9.4",
 ]
 
 [build-system]

@@ -4,10 +4,22 @@
  * values are translated here so no component, operation, or codegen output has
  * to change. This is the Hasura-backed sibling of mock/resolvers.ts.
  */
-import { hasura, GENAI_URL, ML_SERVICE_URL, NOTIFICATION_URL, internalServiceHeaders } from "./hasura";
+import { hasura } from "./hasura";
+import { publishNotification } from "./queue";
 import { safeImageSrc } from "../lib/pdf/render";
 import { requireRole, myCompanyId } from "./auth";
-import { validateInvoiceInput } from "../lib/validateInvoice";
+import {
+  TODAY, iso, dayDiff, round, num, cleanEmail,
+  mapMlModel, mapMlDriftReport, mapMlRetrainEvent, mapReviewQueueItem, mapDemoRequest,
+  mapVendor, mapCompanySettings, mapCustomer, mapInvoice, INVOICE_SEL, COMPANY_SEL,
+  vendorStats, customerStats,
+} from "./mappers";
+import { buildWhere, buildOrderBy } from "./queryBuilders";
+import * as mlService from "./clients/mlService";
+import * as genaiService from "./clients/genaiService";
+import { toInsert, importInvoicesRows } from "./csvImport";
+import { generateAndSendInvoiceImpl, resendInvoiceImpl } from "./invoiceSend";
+import { attachPredictions } from "./predictions";
 
 /** myCompanyId(), or throw — for the {admin:true} mutations below, which
  * bypass Hasura's own company_id filtering and so must scope themselves. */
@@ -15,439 +27,6 @@ function requireCompanyId(): string {
   const id = myCompanyId();
   if (!id) throw new Error("No company on this session — sign in again.");
   return id;
-}
-
-const TODAY = new Date();
-const iso = (d: Date) => d.toISOString().slice(0, 10);
-const dayDiff = (a: string | Date, b: string | Date) =>
-  Math.round((new Date(a).getTime() - new Date(b).getTime()) / 86_400_000);
-const round = (n: number) => Math.round(n * 100) / 100;
-const num = (v: unknown) => (v == null ? 0 : Number(v));
-
-// ---- read-model mapping (snake_case Hasura -> the frontend's camelCase types) ----
-
-function effectivePayment(row: any): "PAID" | "UNPAID" | "OVERDUE" {
-  if (row.payment_status === "paid") return "PAID";
-  return new Date(row.due_date) < TODAY ? "OVERDUE" : "UNPAID";
-}
-const daysOverdue = (row: any) =>
-  effectivePayment(row) === "OVERDUE" ? dayDiff(TODAY, row.due_date) : 0;
-const grossOutstanding = (row: any) =>
-  effectivePayment(row) === "PAID" ? 0 : num(row.amount) + num(row.tax_amount);
-
-/** Trim; empty -> null; reject anything without an "@". */
-function cleanEmail(raw?: string | null): string | null {
-  const e = String(raw ?? "").trim();
-  if (!e) return null;
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new Error("Enter a valid email address");
-  return e;
-}
-
-function mapMlModel(m: any) {
-  const metrics = m?.metrics ?? {};
-  return {
-    status: m?.status ?? "not_trained",
-    method: m?.method ?? "unknown",
-    modelVersion: m?.model_version ?? null,
-    trainedAt: m?.trained_at ?? null,
-    nRows: m?.n_rows ?? null,
-    featureCount: m?.feature_count ?? null,
-    threshold: m?.threshold ?? null,
-    metrics: {
-      rocAuc: metrics.roc_auc ?? null,
-      accuracy: metrics.accuracy ?? null,
-      precision: metrics.precision ?? null,
-      recall: metrics.recall ?? null,
-      maeDays: metrics.mae_days ?? null,
-      r2: metrics.r2 ?? null,
-    },
-  };
-}
-
-function mapMlDriftReport(r: any) {
-  return {
-    modelName: r?.model_name ?? "unknown",
-    checkedAt: r?.checked_at ?? null,
-    driftDetected: Boolean(r?.drift_detected),
-    featurePsiJson: JSON.stringify(r?.feature_psi ?? {}),
-    rollingMetricsJson: JSON.stringify(r?.rolling_metrics ?? {}),
-    baselineMetricsJson: JSON.stringify(r?.baseline_metrics ?? {}),
-    notes: r?.notes ?? null,
-  };
-}
-
-function mapMlRetrainEvent(e: any) {
-  const metrics = (m: any) => ({
-    rocAuc: m?.roc_auc ?? null,
-    accuracy: m?.accuracy ?? null,
-    precision: m?.precision ?? null,
-    recall: m?.recall ?? null,
-    maeDays: m?.mae_days ?? null,
-    r2: m?.r2 ?? null,
-  });
-  return {
-    id: e.id,
-    modelName: e.model_name,
-    triggeredBy: e.triggered_by,
-    startedAt: e.started_at,
-    finishedAt: e.finished_at ?? null,
-    status: e.status,
-    oldVersion: e.old_version ?? null,
-    newVersion: e.new_version ?? null,
-    oldMetrics: e.old_metrics ? metrics(e.old_metrics) : null,
-    newMetrics: e.new_metrics ? metrics(e.new_metrics) : null,
-    error: e.error ?? null,
-  };
-}
-
-function mapReviewQueueItem(r: any) {
-  const draft = r.invoice_draft ?? {};
-  return {
-    id: r.id,
-    status: r.status,
-    issues: r.issues ?? [],
-    createdAt: r.created_at,
-    filename: draft.filename ?? null,
-    direction: draft.direction ?? null,
-    counterpartyName: draft.counterparty_name ?? null,
-    extractedFieldsJson: JSON.stringify(draft.extracted_fields ?? {}),
-    sourceMapJson: JSON.stringify(draft.source_map ?? []),
-    fullText: draft.full_text || null,
-  };
-}
-
-function mapDemoRequest(d: any) {
-  return {
-    id: d.id,
-    companyName: d.company_name,
-    contactName: d.contact_name,
-    workEmail: d.work_email,
-    companySize: d.company_size,
-    message: d.message,
-    createdAt: d.created_at,
-  };
-}
-
-function mapVendor(v: any) {
-  return v
-    ? {
-        id: v.id,
-        name: v.name,
-        taxId: v.tax_id ?? null,
-        paymentTermsDays: v.payment_terms_days ?? null,
-        email: v.email ?? null,
-        invoices: (v.invoices ?? []).map(mapInvoice),
-      }
-    : null;
-}
-
-// ---- shared by generateAndSendInvoice / resendInvoice ---------------------
-
-interface CompanyBillingCtx {
-  name: string;
-  gstin: string | null;
-  pan: string | null;
-  address: string | null;
-  state: string | null;
-  signature_data_url: string | null;
-  logo_data_url: string | null;
-  bank_account_name: string | null;
-  bank_name: string | null;
-  bank_account_number: string | null;
-  bank_ifsc: string | null;
-  bank_swift: string | null;
-}
-interface CustomerBillingCtx {
-  name: string;
-  email: string | null;
-  gstin: string | null;
-  tax_id: string | null;
-  address: string | null;
-  state: string | null;
-}
-
-const COMPANY_BILLING_SEL = `
-  name gstin pan address state signature_data_url logo_data_url
-  bank_account_name bank_name bank_account_number bank_ifsc bank_swift
-`;
-const CUSTOMER_BILLING_SEL = `name email gstin tax_id address state`;
-
-const emptyCompanyBillingCtx = (): CompanyBillingCtx => ({
-  name: "",
-  gstin: null,
-  pan: null,
-  address: null,
-  state: null,
-  signature_data_url: null,
-  logo_data_url: null,
-  bank_account_name: null,
-  bank_name: null,
-  bank_account_number: null,
-  bank_ifsc: null,
-  bank_swift: null,
-});
-
-function companyForPdf(c: CompanyBillingCtx) {
-  const hasBank = c.bank_account_name || c.bank_name || c.bank_account_number;
-  return {
-    name: c.name,
-    gstin: c.gstin,
-    pan: c.pan,
-    address: c.address,
-    state: c.state,
-    logoDataUrl: c.logo_data_url,
-    bank: hasBank
-      ? {
-          accountName: c.bank_account_name,
-          bankName: c.bank_name,
-          accountNumber: c.bank_account_number,
-          ifsc: c.bank_ifsc,
-          swift: c.bank_swift,
-        }
-      : null,
-  };
-}
-
-function customerForPdf(c: CustomerBillingCtx) {
-  return { name: c.name, email: c.email, gstin: c.gstin, pan: c.tax_id, address: c.address, state: c.state };
-}
-
-function lineItemForPdf(li: {
-  description: string;
-  note?: string | null;
-  quantity: number;
-  unitPrice: number;
-  unit?: string | null;
-  hsnSac?: string | null;
-  gstRate?: number | null;
-}) {
-  return {
-    description: li.description,
-    note: li.note ?? null,
-    quantity: li.quantity,
-    unitPrice: li.unitPrice,
-    unit: li.unit || "Units",
-    hsnSac: li.hsnSac ?? null,
-    gstRate: li.gstRate ?? null,
-  };
-}
-
-function lineItemInsertRow(
-  li: {
-    description: string;
-    note?: string | null;
-    quantity: number;
-    unitPrice: number;
-    unit?: string | null;
-    hsnSac?: string | null;
-    gstRate?: number | null;
-  },
-  invoiceId: string,
-  companyId: string,
-) {
-  return {
-    invoice_id: invoiceId,
-    company_id: companyId,
-    description: li.description,
-    note: li.note ?? null,
-    quantity: li.quantity,
-    unit_price: li.unitPrice,
-    line_amount: round(li.quantity * li.unitPrice),
-    unit: li.unit || "Units",
-    hsn_sac: li.hsnSac ?? null,
-    gst_rate: li.gstRate ?? null,
-  };
-}
-
-const COMPANY_SEL = `
-  name aliases signature_data_url logo_data_url gstin pan address state
-  bank_account_name bank_name bank_account_number bank_ifsc bank_swift
-`;
-
-function mapCompanySettings(row: any) {
-  row = row ?? {};
-  return {
-    name: row.name ?? "",
-    aliases: row.aliases ?? [],
-    signatureDataUrl: row.signature_data_url ?? null,
-    logoDataUrl: row.logo_data_url ?? null,
-    gstin: row.gstin ?? null,
-    pan: row.pan ?? null,
-    address: row.address ?? null,
-    state: row.state ?? null,
-    bankAccountName: row.bank_account_name ?? null,
-    bankName: row.bank_name ?? null,
-    bankAccountNumber: row.bank_account_number ?? null,
-    bankIfsc: row.bank_ifsc ?? null,
-    bankSwift: row.bank_swift ?? null,
-  };
-}
-
-function mapCustomer(c: any) {
-  return c
-    ? {
-        id: c.id,
-        name: c.name,
-        taxId: c.tax_id ?? null,
-        email: c.email ?? null,
-        paymentTermsDays: c.payment_terms_days ?? null,
-        creditLimit: c.credit_limit == null ? null : num(c.credit_limit),
-        gstin: c.gstin ?? null,
-        address: c.address ?? null,
-        state: c.state ?? null,
-        invoices: (c.invoices ?? []).map(mapInvoice),
-      }
-    : null;
-}
-
-function mapInvoice(row: any): any {
-  if (!row) return null;
-  return {
-    id: row.id,
-    invoiceNumber: row.invoice_number,
-    description: row.description ?? null,
-    extractedText: row.extracted_text ?? null,
-    direction: String(row.direction ?? "payable").toUpperCase(),
-    collectionStatus: row.collection_status
-      ? String(row.collection_status).toUpperCase()
-      : null,
-    customer: mapCustomer(row.customer),
-    invoiceDate: row.invoice_date,
-    dueDate: row.due_date,
-    amount: num(row.amount),
-    taxAmount: num(row.tax_amount),
-    department: row.department,
-    approvalStatus: String(row.approval_status ?? "pending").toUpperCase(),
-    paymentStatus: effectivePayment(row),
-    source: row.source,
-    template: row.template ?? null,
-    daysOverdue: daysOverdue(row),
-    vendor: mapVendor(row.vendor),
-    purchaseOrder: row.purchaseOrder
-      ? {
-          id: row.purchaseOrder.id,
-          poNumber: row.purchaseOrder.po_number,
-          amount: num(row.purchaseOrder.amount),
-          status: row.purchaseOrder.status,
-          department: row.purchaseOrder.department,
-          vendor: mapVendor(row.purchaseOrder.vendor),
-        }
-      : null,
-    duplicateFlag: row.duplicateFlag
-      ? {
-          matchedInvoiceId: row.duplicateFlag.matched_invoice_id,
-          confidenceScore: num(row.duplicateFlag.confidence_score),
-          reviewedStatus: row.duplicateFlag.reviewed_status,
-          reason: row.duplicateFlag.reason ?? null,
-          explanation: row.duplicateFlag.explanation ?? [],
-          matchedInvoice: row.duplicateFlag.matchedInvoice
-            ? mapInvoice(row.duplicateFlag.matchedInvoice)
-            : null,
-        }
-      : null,
-    delayPrediction: row.delayPrediction
-      ? {
-          delayProbability: num(row.delayPrediction.delay_probability),
-          predictedDelayDays: num(row.delayPrediction.predicted_delay_days),
-          modelVersion: row.delayPrediction.model_version,
-          explanation: row.delayPrediction.explanation ?? [],
-        }
-      : null,
-    approvalEvents: (row.approvals ?? [])
-      .filter((a: any) => a.status && a.status !== "pending")
-      .map((a: any) => ({
-        id: a.id,
-        actor: a.approver,
-        action: a.status,
-        note: null,
-        at: a.acted_at ?? row.invoice_date,
-      })),
-    payments: (row.payments ?? []).map((p: any) => ({
-      id: p.id,
-      paidAt: p.paid_at ?? null,
-      amountPaid: num(p.amount_paid),
-    })),
-  };
-}
-
-const INVOICE_SEL = `
-  id invoice_number description extracted_text direction collection_status
-  invoice_date due_date amount tax_amount department
-  approval_status payment_status source template
-  vendor { id name tax_id payment_terms_days }
-  customer { id name tax_id payment_terms_days email credit_limit }
-  purchaseOrder { id po_number amount status department vendor { id name tax_id payment_terms_days } }
-  duplicateFlag {
-    matched_invoice_id confidence_score reviewed_status reason explanation
-    matchedInvoice { id invoice_number amount tax_amount invoice_date vendor { id name } }
-  }
-  delayPrediction { delay_probability predicted_delay_days model_version explanation }
-  approvals(order_by: { acted_at: asc_nulls_last }) { id approver level status acted_at }
-  payments(order_by: { paid_at: asc_nulls_last }) { id paid_at amount_paid }
-`;
-
-// ---- filter / sort translation --------------------------------------------------
-
-function buildWhere(f: any): Record<string, unknown> {
-  const and: any[] = [];
-  // Default to payables so every existing AP screen is unchanged; AR screens
-  // pass direction: RECEIVABLE explicitly.
-  and.push({ direction: { _eq: String(f?.direction ?? "PAYABLE").toLowerCase() } });
-  if (!f) return { _and: and };
-  if (f.vendorId) and.push({ vendor_id: { _eq: f.vendorId } });
-  if (f.customerId) and.push({ customer_id: { _eq: f.customerId } });
-  if (f.collectionStatus) and.push({ collection_status: { _eq: String(f.collectionStatus).toLowerCase() } });
-  if (f.department) and.push({ department: { _eq: f.department } });
-  if (f.source) and.push({ source: { _eq: f.source } });
-  if (f.approvalStatus) and.push({ approval_status: { _eq: String(f.approvalStatus).toLowerCase() } });
-  if (f.dateFrom) and.push({ invoice_date: { _gte: f.dateFrom } });
-  if (f.dateTo) and.push({ invoice_date: { _lte: f.dateTo } });
-  if (f.paymentStatus === "PAID") and.push({ payment_status: { _eq: "paid" } });
-  if (f.paymentStatus === "OVERDUE")
-    and.push({ payment_status: { _neq: "paid" } }, { due_date: { _lt: iso(TODAY) } });
-  if (f.paymentStatus === "UNPAID")
-    and.push({ payment_status: { _neq: "paid" } }, { due_date: { _gte: iso(TODAY) } });
-  if (f.q)
-    and.push({
-      _or: [
-        { invoice_number: { _ilike: `%${f.q}%` } },
-        { vendor: { name: { _ilike: `%${f.q}%` } } },
-        { customer: { name: { _ilike: `%${f.q}%` } } },
-      ],
-    });
-  return and.length ? { _and: and } : {};
-}
-
-function buildOrderBy(sort: any): Record<string, unknown> {
-  const dir = sort?.dir === "DESC" ? "desc" : "asc";
-  switch (sort?.field) {
-    case "amount":
-      return { amount: dir };
-    case "vendor":
-      return { vendor: { name: dir } };
-    case "customer":
-      return { customer: { name: dir } };
-    case "collectionStatus":
-      return { collection_status: dir };
-    case "invoiceNumber":
-      return { invoice_number: dir };
-    case "invoiceDate":
-      return { invoice_date: dir };
-    case "department":
-      return { department: dir };
-    case "approvalStatus":
-      return { approval_status: dir };
-    case "paymentStatus":
-      return { payment_status: dir };
-    case "daysOverdue":
-      // more overdue == older due date, so invert
-      return { due_date: dir === "desc" ? "asc" : "desc" };
-    case "delayProbability":
-      return { delayPrediction: { delay_probability: `${dir}_nulls_last` } };
-    case "dueDate":
-    default:
-      return { due_date: dir };
-  }
 }
 
 // ---- resolvers ----------------------------------------------------------------
@@ -560,6 +139,7 @@ export const resolvers = {
         const s = sort.dir === "DESC" ? -1 : 1;
         rows = [...rows].sort((a: any, b: any) => s * (a.amount + a.taxAmount - b.amount - b.taxAmount));
       }
+      rows = await attachPredictions(rows, data.invoices[0]?.company_id);
       return { rows, total: data.invoices_aggregate.aggregate.count, page, pageSize };
     },
 
@@ -568,18 +148,13 @@ export const resolvers = {
         `query One($id: uuid!) { invoices_by_pk(id: $id) { ${INVOICE_SEL} } }`,
         { id },
       );
-      return mapInvoice(data.invoices_by_pk);
+      if (!data.invoices_by_pk) return null;
+      const [mapped] = await attachPredictions([mapInvoice(data.invoices_by_pk)], data.invoices_by_pk.company_id);
+      return mapped;
     },
 
     async invoiceSummary(_: unknown, { id }: { id: string }) {
-      const r = await fetch(`${GENAI_URL}/summarize-invoice`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...internalServiceHeaders() },
-        body: JSON.stringify({ invoice_id: id, company_id: requireCompanyId() }),
-      });
-      if (!r.ok) throw new Error(`genai-service /summarize-invoice returned ${r.status}`);
-      const j = await r.json();
-      return j.summary ?? "";
+      return genaiService.summarizeInvoice(id, requireCompanyId());
     },
 
     async vendors() {
@@ -731,14 +306,18 @@ export const resolvers = {
 
     async cashForecast() {
       // Predicted cash-move date = due_date + predicted_delay_days (0 if no model row).
+      // delayPrediction is no longer a Hasura relationship (moved to ml-service's
+      // own private ml_db) — fetch invoices, then batch-fetch predictions by id.
       const data = await hasura(`
         query {
           invoices(where: { payment_status: { _neq: "paid" } }, limit: 2000) {
-            direction due_date amount tax_amount
-            delayPrediction { predicted_delay_days }
+            id company_id direction due_date amount tax_amount
           }
         }
       `);
+      const rows = data.invoices as any[];
+      const companyId = rows[0]?.company_id;
+      const delays = await mlService.getDelayPredictions(companyId, rows.map((r) => r.id));
       const buckets = [
         { label: "0–7 days", max: 7 },
         { label: "8–14 days", max: 14 },
@@ -746,9 +325,9 @@ export const resolvers = {
         { label: "30+ days", max: Infinity },
       ].map((b) => ({ label: b.label, inflow: 0, outflow: 0, net: 0 }));
       const edges = [7, 14, 30, Infinity];
-      for (const row of data.invoices as any[]) {
+      for (const row of rows) {
         const gross = num(row.amount) + num(row.tax_amount);
-        const delay = num(row.delayPrediction?.predicted_delay_days);
+        const delay = num(delays[row.id]?.predicted_delay_days);
         const days = dayDiff(
           iso(new Date(new Date(row.due_date).getTime() + delay * 86_400_000)),
           iso(TODAY),
@@ -778,12 +357,7 @@ export const resolvers = {
       let summary = "The assistant service is unavailable right now.";
       let ids: string[] = [];
       try {
-        const r = await fetch(`${GENAI_URL}/query`, {
-          method: "POST",
-          headers: { "content-type": "application/json", ...internalServiceHeaders() },
-          body: JSON.stringify({ question: prompt, company_id: requireCompanyId() }),
-        });
-        const j = await r.json();
+        const j = await genaiService.askAssistant(prompt, requireCompanyId());
         summary = j.answer ?? summary;
         ids = j.invoice_ids ?? [];
       } catch {
@@ -795,7 +369,7 @@ export const resolvers = {
           `query Refs($ids: [uuid!]!) { invoices(where: { id: { _in: $ids } }) { ${INVOICE_SEL} } }`,
           { ids },
         );
-        invoices = data.invoices.map(mapInvoice);
+        invoices = await attachPredictions(data.invoices.map(mapInvoice), data.invoices[0]?.company_id);
       }
       return { text: summary, invoices };
     },
@@ -812,33 +386,20 @@ export const resolvers = {
 
     async mlModelStatus() {
       requireRole("admin");
-      const res = await fetch(`${ML_SERVICE_URL}/models?company_id=${requireCompanyId()}`, {
-        headers: internalServiceHeaders(),
-      });
-      if (!res.ok) throw new Error(`ml-service /models returned ${res.status}`);
-      const data = await res.json();
+      const data = await mlService.getModels(requireCompanyId());
       return { duplicate: mapMlModel(data.duplicate), delay: mapMlModel(data.delay) };
     },
 
     async mlDriftStatus() {
       requireRole("admin");
-      const res = await fetch(`${ML_SERVICE_URL}/drift?company_id=${requireCompanyId()}`, {
-        headers: internalServiceHeaders(),
-      });
-      if (!res.ok) throw new Error(`ml-service /drift returned ${res.status}`);
-      const data = await res.json();
+      const data = await mlService.getDrift(requireCompanyId());
       return [data.duplicate, data.delay].filter(Boolean).map(mapMlDriftReport);
     },
 
     async mlRetrainHistory(_: unknown, { limit }: { limit?: number | null }) {
       requireRole("admin");
-      const res = await fetch(
-        `${ML_SERVICE_URL}/retrain-history?limit=${limit ?? 20}&company_id=${requireCompanyId()}`,
-        { headers: internalServiceHeaders() },
-      );
-      if (!res.ok) throw new Error(`ml-service /retrain-history returned ${res.status}`);
-      const data = await res.json();
-      return (data as any[]).map(mapMlRetrainEvent);
+      const data = await mlService.getRetrainHistory(requireCompanyId(), limit ?? 20);
+      return data.map(mapMlRetrainEvent);
     },
 
     async reviewQueue(_: unknown, { status }: { status?: string | null }) {
@@ -928,21 +489,19 @@ export const resolvers = {
     ) {
       requireRole("finance_user", "approver", "admin");
       const companyId = requireCompanyId();
+      // duplicate_flags moved to ml-service's own private ml_db — reviewing
+      // a flag is now an ml-service call, not a Hasura mutation.
+      await mlService.reviewDuplicateFlag(companyId, invoiceId, status);
       const data = await hasura(
-        `mutation Review($id: uuid!, $companyId: uuid!, $status: String!) {
-           update_duplicate_flags(
-             where: { invoice_id: { _eq: $id }, company_id: { _eq: $companyId } }
-             _set: { reviewed_status: $status }
-           ) { affected_rows }
-           invoices_by_pk(id: $id) { ${INVOICE_SEL} company_id }
-         }`,
-        { id: invoiceId, status, companyId },
-        { admin: true }, // duplicate_flags has no per-role update perm
+        `query One($id: uuid!) { invoices_by_pk(id: $id) { ${INVOICE_SEL} } }`,
+        { id: invoiceId },
       );
       if (data.invoices_by_pk?.company_id && data.invoices_by_pk.company_id !== companyId) {
         throw new Error("Invoice not found");
       }
-      return mapInvoice(data.invoices_by_pk);
+      if (!data.invoices_by_pk) return null;
+      const [mapped] = await attachPredictions([mapInvoice(data.invoices_by_pk)], companyId);
+      return mapped;
     },
 
     async recordPayment(
@@ -998,18 +557,15 @@ export const resolvers = {
       // itself if the email can't be sent.
       const customer = gate.invoices_by_pk?.customer;
       if (isReceivable && customer?.email) {
-        fetch(`${NOTIFICATION_URL}/notify/payment-received`, {
-          method: "POST",
-          headers: { "content-type": "application/json", ...internalServiceHeaders() },
-          body: JSON.stringify({
+        void publishNotification({
+          type: "payment-received",
+          payload: {
             customer_email: customer.email,
             customer_name: customer.name,
-            invoice_number: gate.invoices_by_pk?.invoice_number,
+            invoice_number: gate.invoices_by_pk?.invoice_number ?? "",
             amount: amountPaid,
             paid_at: paidAt,
-          }),
-        }).catch((err) => {
-          console.error(`recordPayment: failed to send payment-received email for invoice ${invoiceId}`, err);
+          },
         });
       }
 
@@ -1048,226 +604,12 @@ export const resolvers = {
 
     async generateAndSendInvoice(_: unknown, { input }: { input: any }) {
       requireRole("finance_user", "admin");
-      const companyId = requireCompanyId();
-
-      const template = ["classic", "modern", "minimal", "sidebar", "compact"].includes(input.template) ? input.template : "classic";
-      const lineItems = (input.lineItems ?? []) as {
-        description: string;
-        note?: string | null;
-        quantity: number;
-        unitPrice: number;
-        unit?: string | null;
-        hsnSac?: string | null;
-        gstRate?: number | null;
-      }[];
-      if (!lineItems.length) throw new Error("Add at least one line item");
-      const subtotal = round(lineItems.reduce((sum: number, li) => sum + li.quantity * li.unitPrice, 0));
-
-      const ctx = await hasura<{
-        customers_by_pk: CustomerBillingCtx | null;
-        companies_by_pk: CompanyBillingCtx | null;
-      }>(
-        `query Ctx($customerId: uuid!, $companyId: uuid!) {
-           customers_by_pk(id: $customerId) { ${CUSTOMER_BILLING_SEL} }
-           companies_by_pk(id: $companyId) { ${COMPANY_BILLING_SEL} }
-         }`,
-        { customerId: input.customerId, companyId },
-        { admin: true },
-      );
-      const customer = ctx.customers_by_pk;
-      if (!customer) throw new Error("Customer not found");
-      const company = ctx.companies_by_pk ?? emptyCompanyBillingCtx();
-
-      const { splitTax } = await import("../lib/pdf/gst");
-      const gst = splitTax(
-        lineItems.map((li) => ({ hsnSac: li.hsnSac ?? null, gstRate: li.gstRate ?? null, taxableValue: li.quantity * li.unitPrice })),
-        company.state,
-        customer.state,
-      );
-      const tax = gst.totalTax;
-      const total = round(subtotal + tax);
-
-      const data = await hasura(
-        `mutation Create($o: invoices_insert_input!) { insert_invoices_one(object: $o) { ${INVOICE_SEL} } }`,
-        {
-          o: {
-            invoice_number: String(input.invoiceNumber),
-            description: input.notes ? String(input.notes).trim() : null,
-            direction: "receivable",
-            customer_id: input.customerId,
-            company_id: companyId,
-            invoice_date: String(input.invoiceDate),
-            due_date: String(input.dueDate),
-            amount: subtotal,
-            tax_amount: tax,
-            department: "sales",
-            source: "manual",
-            collection_status: "sent",
-            template,
-            buyer_order_no: input.buyerOrderNo ? String(input.buyerOrderNo).trim() || null : null,
-            ack_no: input.ackNo ? String(input.ackNo).trim() || null : null,
-          },
-        },
-        { admin: true },
-      );
-      const invoiceRow = data.insert_invoices_one;
-
-      await hasura(
-        `mutation Items($rows: [invoice_line_items_insert_input!]!) { insert_invoice_line_items(objects: $rows) { affected_rows } }`,
-        { rows: lineItems.map((li) => lineItemInsertRow(li, invoiceRow.id, companyId)) },
-        { admin: true },
-      );
-
-      // Best-effort: the invoice is created and tracked either way, even if
-      // rendering or sending the PDF fails.
-      try {
-        const { renderInvoicePdf } = await import("../lib/pdf/render");
-        const pdf = await renderInvoicePdf({
-          template,
-          invoiceNumber: String(input.invoiceNumber),
-          invoiceDate: String(input.invoiceDate),
-          dueDate: String(input.dueDate),
-          notes: input.notes ?? null,
-          buyerOrderNo: input.buyerOrderNo ?? null,
-          ackNo: input.ackNo ?? null,
-          company: companyForPdf(company),
-          customer: customerForPdf(customer),
-          lineItems: lineItems.map(lineItemForPdf),
-          subtotal,
-          tax,
-          total,
-          signatureDataUrl: company.signature_data_url,
-        });
-        if (customer.email) {
-          try {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 5000);
-            const res = await fetch(`${NOTIFICATION_URL}/notify/send-invoice`, {
-              method: "POST",
-              headers: { "content-type": "application/json", ...internalServiceHeaders() },
-              body: JSON.stringify({
-                customer_email: customer.email,
-                customer_name: customer.name,
-                invoice_number: String(input.invoiceNumber),
-                pdf_base64: pdf.toString("base64"),
-              }),
-              signal: controller.signal,
-            }).finally(() => clearTimeout(timer));
-            if (!res.ok) {
-              console.error(`generateAndSendInvoice: notify service returned ${res.status} for invoice ${input.invoiceNumber}`);
-            }
-          } catch (err) {
-            // Notification service timeout or network error — invoice remains created
-            console.error(`generateAndSendInvoice: failed to send email for invoice ${input.invoiceNumber}`, err);
-          }
-        }
-      } catch (err) {
-        // rendering failed — the invoice itself is still created and tracked
-        console.error(`generateAndSendInvoice: PDF render failed for invoice ${input.invoiceNumber}`, err);
-      }
-
-      return mapInvoice(invoiceRow);
+      return generateAndSendInvoiceImpl(requireCompanyId(), input);
     },
 
     async resendInvoice(_: unknown, { id }: { id: string }) {
       requireRole("finance_user", "admin");
-      const companyId = requireCompanyId();
-
-      const ctx = await hasura<{
-        invoices_by_pk: {
-          invoice_number: string;
-          invoice_date: string;
-          due_date: string;
-          description: string | null;
-          amount: string;
-          tax_amount: string;
-          template: string | null;
-          company_id: string;
-          buyer_order_no: string | null;
-          ack_no: string | null;
-          customer: CustomerBillingCtx | null;
-          lineItems: {
-            description: string;
-            note: string | null;
-            quantity: string;
-            unit_price: string;
-            unit: string | null;
-            hsn_sac: string | null;
-            gst_rate: string | null;
-          }[];
-        } | null;
-        companies_by_pk: CompanyBillingCtx | null;
-      }>(
-        `query Ctx($id: uuid!, $companyId: uuid!) {
-           invoices_by_pk(id: $id) {
-             invoice_number invoice_date due_date description amount tax_amount template company_id buyer_order_no ack_no
-             customer { ${CUSTOMER_BILLING_SEL} }
-             lineItems { description note quantity unit_price unit hsn_sac gst_rate }
-           }
-           companies_by_pk(id: $companyId) { ${COMPANY_BILLING_SEL} }
-         }`,
-        { id, companyId },
-        { admin: true },
-      );
-      const invoice = ctx.invoices_by_pk;
-      if (!invoice || invoice.company_id !== companyId) throw new Error("Invoice not found");
-      if (!invoice.template) throw new Error("This invoice wasn't generated with a template — nothing to resend.");
-      if (!invoice.customer) throw new Error("This invoice has no customer to send to.");
-      if (!invoice.customer.email) throw new Error("This customer has no email on file.");
-
-      const subtotal = num(invoice.amount);
-      const tax = num(invoice.tax_amount);
-      const company = ctx.companies_by_pk ?? emptyCompanyBillingCtx();
-
-      const { renderInvoicePdf } = await import("../lib/pdf/render");
-      const pdf = await renderInvoicePdf({
-        template: invoice.template as any,
-        invoiceNumber: invoice.invoice_number,
-        invoiceDate: invoice.invoice_date,
-        dueDate: invoice.due_date,
-        notes: invoice.description,
-        buyerOrderNo: invoice.buyer_order_no,
-        ackNo: invoice.ack_no,
-        company: companyForPdf(company),
-        customer: customerForPdf(invoice.customer),
-        lineItems: invoice.lineItems.map((li) =>
-          lineItemForPdf({
-            description: li.description,
-            note: li.note,
-            quantity: num(li.quantity),
-            unitPrice: num(li.unit_price),
-            unit: li.unit,
-            hsnSac: li.hsn_sac,
-            gstRate: li.gst_rate == null ? null : num(li.gst_rate),
-          }),
-        ),
-        subtotal,
-        tax,
-        total: round(subtotal + tax),
-        signatureDataUrl: company.signature_data_url,
-      });
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5000);
-      let res: Response;
-      try {
-        res = await fetch(`${NOTIFICATION_URL}/notify/send-invoice`, {
-          method: "POST",
-          headers: { "content-type": "application/json", ...internalServiceHeaders() },
-          body: JSON.stringify({
-            customer_email: invoice.customer.email,
-            customer_name: invoice.customer.name,
-            invoice_number: invoice.invoice_number,
-            pdf_base64: pdf.toString("base64"),
-          }),
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timer);
-      }
-      if (!res.ok) throw new Error(`Couldn't send the email (notification-service returned ${res.status})`);
-      const body = await res.json();
-      return Boolean(body.sent);
+      return resendInvoiceImpl(requireCompanyId(), id);
     },
 
     async deleteInvoice(_: unknown, { id }: { id: string }) {
@@ -1522,31 +864,15 @@ export const resolvers = {
 
     async triggerDriftCheck() {
       requireRole("admin");
-      const companyId = requireCompanyId();
-      const res = await fetch(`${ML_SERVICE_URL}/drift/check`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...internalServiceHeaders() },
-        body: JSON.stringify({ company_id: companyId }),
-      });
-      if (!res.ok) throw new Error(`ml-service /drift/check returned ${res.status}`);
-      const data = (await res.json())[companyId] ?? {};
+      const data = await mlService.checkDrift(requireCompanyId());
       return [data.duplicate, data.delay].filter(Boolean).map(mapMlDriftReport);
     },
 
     async triggerModelRetrain(_: unknown, { modelName }: { modelName: string }) {
       requireRole("admin");
       const companyId = requireCompanyId();
-      const res = await fetch(`${ML_SERVICE_URL}/retrain`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...internalServiceHeaders() },
-        body: JSON.stringify({ model_name: modelName, company_id: companyId }),
-      });
-      if (!res.ok) throw new Error(`ml-service /retrain returned ${res.status}`);
-      const result = await res.json();
-      const history = await fetch(`${ML_SERVICE_URL}/retrain-history?limit=1&company_id=${companyId}`, {
-        headers: internalServiceHeaders(),
-      });
-      const [latest] = await history.json();
+      const result = await mlService.retrain(companyId, modelName);
+      const [latest] = await mlService.getRetrainHistory(companyId, 1);
       return latest
         ? mapMlRetrainEvent(latest)
         : {
@@ -1576,114 +902,7 @@ export const resolvers = {
 
     async importInvoices(_: unknown, { rows }: { rows: any[] }) {
       requireRole("finance_user"); // invoice import is finance_user's job, not admin's
-      const companyId = requireCompanyId();
-      const vendorIds: Set<string> = new Set(
-        (await hasura(`query { vendors { id } }`)).vendors.map((v: any) => v.id),
-      );
-      const existingKeys: Set<string> = new Set(
-        (
-          await hasura(`query { invoices(limit: 10000) { vendor_id invoice_number } }`)
-        ).invoices.map((r: any) => `${r.vendor_id}|${r.invoice_number}`),
-      );
-      const errors: { row: number; message: string }[] = [];
-      const valid: any[] = [];
-      const seen = new Set<string>();
-      rows.forEach((input, i) => {
-        const problem = validateInvoiceInput(input, vendorIds);
-        if (problem) {
-          errors.push({ row: i + 1, message: problem });
-          return;
-        }
-        const key = `${input.vendorId}|${String(input.invoiceNumber)}`;
-        if (existingKeys.has(key) || seen.has(key)) {
-          errors.push({
-            row: i + 1,
-            message: `Duplicate invoice "${input.invoiceNumber}" for this vendor — skipped`,
-          });
-          return;
-        }
-        seen.add(key);
-        valid.push({ ...toInsert(input), company_id: companyId });
-      });
-      let created = 0;
-      if (valid.length) {
-        const data = await hasura(
-          `mutation Import($o: [invoices_insert_input!]!) { insert_invoices(objects: $o) { affected_rows } }`,
-          { o: valid },
-          { admin: true },
-        );
-        created = data.insert_invoices.affected_rows;
-      }
-      return { created, failed: errors.length, errors };
+      return importInvoicesRows(requireCompanyId(), rows);
     },
   },
 };
-
-function vendorStats(v: any) {
-  const list = v.invoices ?? [];
-  const paid = list.filter((i: any) => i.payment_status === "paid");
-  const lateness = paid.map((i: any) => {
-    const paidAt = i.payments?.[0]?.paid_at;
-    return paidAt ? Math.max(0, dayDiff(paidAt, i.due_date)) : 0;
-  });
-  const avgDelayDays = lateness.length
-    ? Math.round((lateness.reduce((a: number, b: number) => a + b, 0) / lateness.length) * 10) / 10
-    : 0;
-  const onTime = lateness.filter((d: number) => d === 0).length;
-  return {
-    vendor: {
-      id: v.id, name: v.name, taxId: v.tax_id ?? null,
-      paymentTermsDays: v.payment_terms_days ?? null, email: v.email ?? null, invoices: [],
-    },
-    totalInvoices: list.length,
-    totalExposure: round(list.reduce((s: number, i: any) => s + grossOutstanding(i), 0)),
-    avgDelayDays,
-    onTimePct: paid.length ? Math.round((onTime / paid.length) * 100) : 100,
-  };
-}
-
-function customerStats(c: any) {
-  const list = c.invoices ?? [];
-  const paid = list.filter((i: any) => i.payment_status === "paid");
-  const lateness = paid.map((i: any) => {
-    const paidAt = i.payments?.[0]?.paid_at;
-    return paidAt ? Math.max(0, dayDiff(paidAt, i.due_date)) : 0;
-  });
-  const avgDelayDays = lateness.length
-    ? Math.round((lateness.reduce((a: number, b: number) => a + b, 0) / lateness.length) * 10) / 10
-    : 0;
-  const onTime = lateness.filter((d: number) => d === 0).length;
-  return {
-    customer: { ...mapCustomer(c), invoices: [] },
-    totalInvoices: list.length,
-    totalExposure: round(list.reduce((s: number, i: any) => s + grossOutstanding(i), 0)),
-    avgDelayDays,
-    onTimePct: paid.length ? Math.round((onTime / paid.length) * 100) : 100,
-  };
-}
-
-function toInsert(input: any) {
-  const direction = String(input.direction ?? "PAYABLE").toLowerCase();
-  const o: Record<string, unknown> = {
-    invoice_number: String(input.invoiceNumber),
-    description: input.description ? String(input.description).trim() : null,
-    extracted_text: input.extractedText ? String(input.extractedText) : null,
-    direction,
-    invoice_date: String(input.invoiceDate),
-    due_date: String(input.dueDate),
-    amount: Number(input.amount),
-    tax_amount: Number(input.taxAmount ?? 0),
-    department: String(input.department),
-    source: ["manual", "csv", "ocr"].includes(input.source) ? input.source : "manual",
-  };
-  if (direction === "receivable") {
-    if (!input.customerId) throw new Error("A receivable needs a customer");
-    o.customer_id = String(input.customerId);
-    o.collection_status = String(input.collectionStatus ?? "DRAFT").toLowerCase();
-  } else {
-    if (!input.vendorId) throw new Error("A payable needs a vendor");
-    o.vendor_id = String(input.vendorId);
-    if (input.purchaseOrderId) o.po_id = String(input.purchaseOrderId);
-  }
-  return o;
-}

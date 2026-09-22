@@ -101,15 +101,11 @@ def route_offline(
                 f"invoices for {name}",
             )
 
-    if "duplicate" in q:
-        return (
-            QuerySpec(
-                table="duplicate_flags",
-                order_by={"confidence_score": "desc"},
-                limit=25,
-            ),
-            "duplicate flags, highest confidence first",
-        )
+    # "duplicate"/"delay"/"risk" questions used to route to duplicate_flags/
+    # delay_predictions directly — both moved to ml-service's own private
+    # ml_db and are no longer Hasura-queryable (see whitelist.py), so those
+    # branches are gone; these questions now fall through to the generic
+    # invoice answer below instead of erroring.
     if "overdue" in q:
         # "overdue" is never a stored payment_status value (only paid/unpaid) —
         # it's derived, same as the frontend's effectivePaymentStatus(): unpaid
@@ -139,16 +135,6 @@ def route_offline(
                 ),
                 f"{val} invoices",
             )
-    if any(k in q for k in ("high-risk", "high risk", "late", "delay", "risk")):
-        return (
-            QuerySpec(
-                table="delay_predictions",
-                where={"delay_probability": {"_gte": 0.67}},
-                order_by={"delay_probability": "desc"},
-                limit=50,
-            ),
-            "invoices with a modelled late-payment probability of 67% or more",
-        )
     if "vendor" in q:
         return QuerySpec(table="vendors", order_by={"name": "asc"}, limit=50), "all vendors"
     return (

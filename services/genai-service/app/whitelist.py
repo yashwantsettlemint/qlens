@@ -1,6 +1,12 @@
 """What the LLM (and the offline path) is allowed to query. Nothing outside this
 map reaches Hasura — no schema introspection, no arbitrary tables/fields. Matches
-the genai_readonly grant (invoices, vendors, duplicate_flags, delay_predictions).
+the genai_readonly grant (invoices, vendors).
+
+duplicate_flags/delay_predictions were removed from here when they moved to
+ml-service's own private ml_db (see services/ml-service/app/db.py) — Hasura
+can no longer see them at all, so a structured question that used to resolve
+to one of these tables now falls through to "I don't have that data" instead
+of a direct answer. Accepted, deliberate degradation, not a bug.
 """
 
 from __future__ import annotations
@@ -11,20 +17,12 @@ TABLES: dict[str, list[str]] = {
         "amount", "tax_amount", "department", "approval_status", "payment_status", "source",
     ],
     "vendors": ["id", "name", "tax_id", "payment_terms_days"],
-    "duplicate_flags": [
-        "id", "invoice_id", "matched_invoice_id", "confidence_score", "method", "reviewed_status",
-    ],
-    "delay_predictions": [
-        "id", "invoice_id", "delay_probability", "predicted_delay_days", "model_version",
-    ],
 }
 
 # nested relationships the builder may include, and their allowed fields
 RELATIONS: dict[str, dict[str, list[str]]] = {
     "invoices": {
         "vendor": ["id", "name"],
-        "duplicateFlag": ["confidence_score", "method", "reviewed_status"],
-        "delayPrediction": ["delay_probability", "predicted_delay_days", "model_version"],
     },
 }
 

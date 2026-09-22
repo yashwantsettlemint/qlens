@@ -8,6 +8,9 @@
   GET  /drift            Latest persisted drift report per model.
   POST /retrain          Manual retrain trigger, body {"model_name": "delay"|"duplicate"}.
   GET  /retrain-history   Recent retrain events.
+  GET  /duplicate-flags   Batch read, by invoice_ids — web app stitches onto invoice rows.
+  GET  /delay-predictions Batch read, by invoice_ids — same.
+  POST /duplicate-flags/review  Marks a flag confirmed_duplicate/false_positive.
   GET  /health
 """
 
@@ -24,15 +27,16 @@ from .delay import model_info as delay_model_info
 from .delay import predict_delay
 from .duplicates import detect
 from .duplicates import model_info as duplicate_model_info
-from .hasura import (
-    HasuraError,
-    fetch_context,
+from .db import (
     fetch_latest_drift,
-    fetch_open_invoices,
     fetch_retrain_history,
+    get_delay_predictions,
+    get_duplicate_flags,
+    review_duplicate_flag,
     write_delay_prediction,
     write_duplicate_flag,
 )
+from .hasura import HasuraError, fetch_context, fetch_open_invoices
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("ml-service")
@@ -225,3 +229,32 @@ async def retrain(body: dict) -> dict:
 @app.get("/retrain-history", dependencies=[Depends(require_internal_token)])
 async def retrain_history(company_id: str, limit: int = 20) -> list[dict]:
     return await fetch_retrain_history(company_id, limit)
+
+
+# --- duplicate_flags / delay_predictions batch reads --------------------------
+# These used to be a Hasura relationship joined straight into the invoice
+# query (apps/web/server/mappers.ts's INVOICE_SEL). Now the web app fetches
+# invoices from Hasura, then calls these two endpoints once per page (batched
+# by id, not per-row) and stitches the results on — see
+# apps/web/server/clients/mlService.ts's getDuplicateFlags/getDelayPredictions.
+
+
+@app.get("/duplicate-flags", dependencies=[Depends(require_internal_token)])
+async def duplicate_flags_batch(company_id: str, invoice_ids: str) -> dict:
+    ids = [i for i in invoice_ids.split(",") if i]
+    return await get_duplicate_flags(company_id, ids)
+
+
+@app.get("/delay-predictions", dependencies=[Depends(require_internal_token)])
+async def delay_predictions_batch(company_id: str, invoice_ids: str) -> dict:
+    ids = [i for i in invoice_ids.split(",") if i]
+    return await get_delay_predictions(company_id, ids)
+
+
+@app.post("/duplicate-flags/review", dependencies=[Depends(require_internal_token)])
+async def review_duplicate(body: dict) -> dict:
+    invoice_id, company_id, status = body.get("invoice_id"), body.get("company_id"), body.get("status")
+    if not (invoice_id and company_id and status):
+        raise HTTPException(400, "body must include invoice_id, company_id, status")
+    await review_duplicate_flag(invoice_id, company_id, status)
+    return {"ok": True}

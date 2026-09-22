@@ -1,14 +1,1 @@
-- function:
-    name: match_invoice_embeddings
-    schema: public
-  configuration:
-    exposed_as: query
-  permissions:
-    - role: genai_readonly
-- function:
-    name: upsert_invoice_embedding
-    schema: public
-  configuration:
-    exposed_as: mutation
-  permissions:
-    - role: genai_writer
+[]

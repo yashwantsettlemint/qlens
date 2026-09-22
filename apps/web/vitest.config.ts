@@ -9,5 +9,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["{lib,server,mock}/**/*.test.ts"],
+    // server/hasura.test.ts needs a real JWT secret to mint/verify tokens
+    // (production requires it be set; tests shouldn't rely on the dev default).
+    env: { HASURA_GRAPHQL_JWT_SECRET: '{"type":"HS256","key":"test-jwt-signing-key-32chars-minimum"}' },
   },
 });

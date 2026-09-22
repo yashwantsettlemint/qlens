@@ -11,22 +11,6 @@ object_relationships:
   - name: purchaseOrder
     using:
       foreign_key_constraint_on: po_id
-  - name: duplicateFlag
-    using:
-      manual_configuration:
-        remote_table:
-          name: duplicate_flags
-          schema: public
-        column_mapping:
-          id: invoice_id
-  - name: delayPrediction
-    using:
-      manual_configuration:
-        remote_table:
-          name: delay_predictions
-          schema: public
-        column_mapping:
-          id: invoice_id
 array_relationships:
   - name: approvals
     using:

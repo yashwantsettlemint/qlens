@@ -13,8 +13,11 @@ def run() -> None:
     assert v == {"where": {"payment_status": {"_eq": "overdue"}}}
     assert "vendor {" in q  # include=['vendor']
 
+    # delay_predictions moved to ml-service's own private db (Hasura can't see
+    # it anymore) — this now falls through to the generic default, same as
+    # any other question none of the keyword routes match.
     spec, _ = route_offline("summarize high-risk invoices this month")
-    assert spec.table == "delay_predictions" and spec.where == {"delay_probability": {"_gte": 0.67}}
+    assert spec.table == "invoices" and spec.order_by == {"amount": "desc"}
 
     spec, _ = route_offline("anything at all")
     assert spec.table == "invoices" and spec.order_by == {"amount": "desc"}
