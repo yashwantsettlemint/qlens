@@ -11,6 +11,8 @@ import app.rag as rag
 from app.query_builder import QuerySpec
 from app.rag import OFF_TOPIC_ANSWER, answer_structured, classify_question, handle_query
 
+COMPANY_ID = "company-1"
+
 
 def _check_off_topic_short_circuit() -> None:
     """A cleanly-declined LLM call (greeting / off-topic) must not fall through
@@ -25,13 +27,13 @@ def _check_off_topic_short_circuit() -> None:
         config.OFFLINE = False
 
         llm.plan_query = lambda question: None  # simulate a clean decline
-        result = asyncio.run(answer_structured("hi"))
+        result = asyncio.run(answer_structured("hi", COMPANY_ID))
         assert result == {"rows": [], "invoice_ids": [], "table": None, "what": "off_topic"}
 
-        async def _stub_route_offline(question: str):
+        async def _stub_route_offline(question: str, company_id: str):
             return QuerySpec(table="invoices", limit=1), "stubbed offline route"
 
-        async def _stub_run_query(query: str, variables: dict) -> dict:
+        async def _stub_run_query(query: str, variables: dict, company_id: str) -> dict:
             return {"invoices": []}
 
         def _boom(question: str) -> None:
@@ -40,14 +42,14 @@ def _check_off_topic_short_circuit() -> None:
         llm.plan_query = _boom
         rag._route_offline = _stub_route_offline
         rag.run_query = _stub_run_query
-        result = asyncio.run(answer_structured("overdue invoices"))
+        result = asyncio.run(answer_structured("overdue invoices", COMPANY_ID))
         assert result["what"] == "stubbed offline route"  # degraded, not off_topic
 
         # same off-topic decline, but through handle_query() (the /query path
         # the Ask panel now calls) — must not fall through to synthesize()
         # with the off_topic sentinel disguised as a real (empty) result.
         llm.plan_query = lambda question: None
-        hq = asyncio.run(handle_query("how many invoices are overdue"))
+        hq = asyncio.run(handle_query("how many invoices are overdue", COMPANY_ID))
         assert hq["answer"] == OFF_TOPIC_ANSWER, hq
         assert hq["invoice_ids"] == [] and hq["structured"] is None and hq["semantic"] == []
     finally:
@@ -73,11 +75,11 @@ def _check_invalid_llm_filter_degrades_to_offline() -> None:
             "where": {"vendor_name": {"_eq": "State Bank of India"}},  # not a real column
         }
 
-        async def _stub_run_query(query: str, variables: dict) -> dict:
+        async def _stub_run_query(query: str, variables: dict, company_id: str) -> dict:
             return {"vendors": []} if "vendors" in query else {"invoices": []}
 
         rag.run_query = _stub_run_query
-        result = asyncio.run(answer_structured("payment pending from State Bank of India"))
+        result = asyncio.run(answer_structured("payment pending from State Bank of India", COMPANY_ID))
         assert result["what"] != "off_topic"
         assert result["table"] == "invoices" and result["rows"] == []
     finally:
@@ -93,16 +95,16 @@ def _check_empty_semantic_falls_back_to_structured() -> None:
     orig_safe_semantic = rag._safe_semantic
     orig_safe_structured = rag._safe_structured
     try:
-        async def _empty_semantic(question, top_k=5):
+        async def _empty_semantic(question, company_id, top_k=5):
             return []  # ran fine, found nothing close — not None
 
-        async def _real_structured(question):
+        async def _real_structured(question, company_id):
             return {"rows": [{"id": "x"}], "invoice_ids": ["x"], "table": "invoices", "what": "stub"}
 
         rag._safe_semantic = _empty_semantic
         rag._safe_structured = _real_structured
         # "find invoices similar to X" is a pure lexical semantic hint — no LLM call
-        result = asyncio.run(handle_query("find invoices similar to X"))
+        result = asyncio.run(handle_query("find invoices similar to X", COMPANY_ID))
         assert result["route"] == "structured", result
         assert result["structured"] is not None, result
         assert result["invoice_ids"] == ["x"], result

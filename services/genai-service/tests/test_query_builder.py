@@ -1,5 +1,7 @@
 """Runnable check:  python tests/test_query_builder.py"""
 
+from datetime import date
+
 from app.query_builder import QuerySpec, build, route_offline, spec_from_tool_args
 from app.whitelist import NotAllowed
 
@@ -7,10 +9,15 @@ from app.whitelist import NotAllowed
 def run() -> None:
     # offline routing
     spec, what = route_offline("which invoices are overdue?")
-    assert spec.table == "invoices" and spec.where == {"payment_status": {"_eq": "overdue"}}
+    # "overdue" is never a stored payment_status value (only paid/unpaid) — it's
+    # derived: unpaid and past due date (see query_builder.py's route_offline).
+    assert spec.table == "invoices" and spec.where == {
+        "payment_status": {"_neq": "paid"},
+        "due_date": {"_lt": date.today().isoformat()},
+    }
     q, v = build(spec)
     assert "invoices(" in q and "order_by: { due_date: asc }" in q
-    assert v == {"where": {"payment_status": {"_eq": "overdue"}}}
+    assert v == {"where": spec.where}
     assert "vendor {" in q  # include=['vendor']
 
     # delay_predictions moved to ml-service's own private db (Hasura can't see

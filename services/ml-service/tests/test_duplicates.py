@@ -48,12 +48,12 @@ def run() -> None:
     # ---- model-backed prediction ----
     delay._load_model.cache_clear()
     orig = delay._load_model
-    delay._load_model = lambda: _FAKE_MODEL
+    delay._load_model = lambda company_id: _FAKE_MODEL
     try:
-        high = predict_from_features(feats)
+        high = predict_from_features(feats, "company-1")
         low = predict_from_features(assemble_features(
             vendor_ontime_rate=0.95, amount=1000, department="IT",
-            approval_chain_length=1, invoice_day_of_month=3, tax_amount=180, po_matched=True))
+            approval_chain_length=1, invoice_day_of_month=3, tax_amount=180, po_matched=True), "company-1")
         assert high["delay_probability"] > low["delay_probability"], (low, high)
         assert high["model_version"] == "xgb-fake"
     finally:
@@ -67,7 +67,7 @@ def run() -> None:
     try:
         raised = False
         try:
-            predict_from_features(feats)
+            predict_from_features(feats, "company-1")
         except ModelUnavailable:
             raised = True
         assert raised, "expected ModelUnavailable when the model file is absent"

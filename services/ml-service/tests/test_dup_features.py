@@ -48,16 +48,16 @@ def run() -> None:
     # ---- detect() routes through the model ----
     duplicates._load_model.cache_clear()
     orig = duplicates._load_model
-    duplicates._load_model = lambda: _FAKE_MODEL
+    duplicates._load_model = lambda company_id: _FAKE_MODEL
     try:
         cand = {"id": "c1", **NEAR[0]}
         existing = [{"id": "e1", **NEAR[1]}, {"id": "e2", **FAR[1]}]
-        m = duplicates.detect(cand, existing)
+        m = duplicates.detect(cand, existing, "company-1")
         assert m and m.matched_invoice_id == "e1" and m.method == "ml", m
         assert 0.5 <= m.confidence_score <= 1.0
 
         # nothing similar enough -> no flag
-        assert duplicates.detect(cand, [{"id": "e2", **FAR[1]}]) is None
+        assert duplicates.detect(cand, [{"id": "e2", **FAR[1]}], "company-1") is None
     finally:
         duplicates._load_model = orig
         duplicates._load_model.cache_clear()
@@ -69,7 +69,7 @@ def run() -> None:
     try:
         raised = False
         try:
-            duplicates.detect({"id": "c1", **NEAR[0]}, [{"id": "e1", **NEAR[1]}])
+            duplicates.detect({"id": "c1", **NEAR[0]}, [{"id": "e1", **NEAR[1]}], "company-1")
         except ModelUnavailable:
             raised = True
         assert raised, "expected ModelUnavailable when the model file is absent"

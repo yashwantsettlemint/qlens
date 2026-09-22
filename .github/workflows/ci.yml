@@ -25,12 +25,40 @@ jobs:
 
   services:
     runs-on: ubuntu-latest
+    # test_auth.py needs a real Postgres with the schema applied — it exercises
+    # auth-service's DB-backed login/lockout/invite flow against actual rows
+    # (e.g. the multi_tenant migration's seeded "kavya" user), not mocks.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: invoice_tracker
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PG_DATABASE_URL: postgres://postgres:postgrespassword@localhost:5433/invoice_tracker
+      HASURA_GRAPHQL_JWT_SECRET: '{"type":"HS256","key":"dev-jwt-signing-key-change-me-32chars-min"}'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
+      - name: Apply hasura/migrations/default in order
+        env:
+          PGPASSWORD: postgrespassword
+        run: |
+          for f in hasura/migrations/default/*/up.sql; do
+            echo "applying $f"
+            psql -h localhost -p 5433 -U postgres -d invoice_tracker -v ON_ERROR_STOP=1 -f "$f"
+          done
       - name: Install shared-types + every service
         run: |
           pip install -e packages/shared-types
