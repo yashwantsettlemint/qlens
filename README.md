@@ -620,10 +620,12 @@ digest formatter, and JWT mint/verify/refresh.
 
 This is a take-home / demo build. Deliberate shortcuts, each with a known ceiling:
 
-- **`auth-service` is mock** — plaintext dev users, no real IdP. It does have a minimum
-  password length and a login lockout (5 failed attempts → 429 for 15 minutes,
-  migration `1730000000023_auth_lockout`), but there's still no real IdP behind it. Only
-  `/login` and the JWT shape are meant to survive a real replacement.
+- **`auth-service` is mock** — a dev-seeded user directory in your own database, not a
+  real IdP (no OAuth/OIDC/SAML/LDAP). Passwords aren't plaintext, though — they're
+  bcrypt-hashed both in the app (`bcrypt.hashpw`/`checkpw` in `app/users.py`) and in the
+  seed data itself. It also has a minimum password length and a login lockout
+  (5 failed attempts → 429 for 15 minutes, migration `1730000000023_auth_lockout`). Only
+  `/login` and the JWT shape are meant to survive swapping in a real IdP.
 - **Every backend service self-mints its own scoped Hasura JWT** (`ml_service`,
   `genai_readonly`/`genai_writer`, `notifier`, `ocr_service`, `finance_user`) — none of
   ingestion/ml/genai/notification/ocr use the raw admin secret. The **web BFF** still
