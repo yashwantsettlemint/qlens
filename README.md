@@ -146,7 +146,10 @@ services/
 packages/shared-types/         Python enums/constants (match the SQL schema) + the Hasura JWT mint/verify helper
 
 infra/
-  docker-compose.yml           full stack: postgres + hasura + seed + the FastAPI services
+  docker-compose.yml           full stack: postgres + hasura + rabbitmq + seed + the FastAPI
+                                services + the web frontend (see Quickstart Option D)
+  postgres-init/                one-time init scripts (run only on an empty volume) that
+                                create ocr_db/genai_db/ml_db — each service's private database
   .env.example                 copy to infra/.env
 ```
 
@@ -203,7 +206,7 @@ curl -s localhost:8088/v1/graphql -H "Authorization: Bearer $TOKEN" \
 
 ### Option C — frontend against the real backend
 
-Bring up Option B, then:
+Bring up Option B, then run the frontend outside Docker for hot reload:
 
 ```bash
 cd apps/web
@@ -225,6 +228,21 @@ REQUIRE_AUTH=                                        # set 1 to reject unauthent
 Sign in at `/login`. Dev users below. The browser's Apollo client posts the frontend's
 own operations to `/api/graphql`; no component, operation, or codegen output differs
 between the two modes.
+
+### Option D — everything in Docker, including the frontend
+
+`infra/docker-compose.yml` also runs the frontend now (service `web`,
+`apps/web/Dockerfile`) — a production Next.js build, not hot-reloading, meant to mirror
+how the app would actually run deployed:
+
+```bash
+cp infra/.env.example infra/.env
+docker compose -f infra/docker-compose.yml up -d
+```
+
+It's on host port **3002**, not 3000 — chosen to avoid clashing with a local `next dev`
+(also on 3000) or other common local tools. Rebuild after any `apps/web` code change
+(`docker compose -f infra/docker-compose.yml build web && docker compose -f infra/docker-compose.yml up -d web`); it does not hot-reload.
 
 ---
 
@@ -325,18 +343,40 @@ Enum-like columns are plain `TEXT` with app-level values kept in
 | `invoice_line_items` | `invoice_id →`, `description`, `quantity`, `unit_price`, `line_amount` | `ON DELETE CASCADE` |
 | `approvals` | `invoice_id →`, `approver`, `level`, `status`, `acted_at` | one row per approval step |
 | `payments` | `invoice_id →`, `paid_at`, `amount_paid` | |
-| `duplicate_flags` | `invoice_id →`, `matched_invoice_id →?`, `confidence_score`, `method`, `reviewed_status` | reviewed: `unreviewed` / `confirmed_duplicate` / `false_positive` |
-| `delay_predictions` | `invoice_id →`, `delay_probability`, `predicted_delay_days`, `model_version` | one current row per invoice (writer deletes + re-inserts) |
 | `vendor_exposure` *(view)* | `vendor_id`, `payment_status`, `SUM(amount)`, `COUNT(*)` | vendor-wise exposure, read by the dashboard |
 
 Indexes cover the queries the dashboard, overdue sweep and ML lookups actually hit
 (`invoices(vendor_id)`, `invoices(payment_status, due_date)`, `invoices(approval_status)`,
 and `invoice_id` on each child table).
 
-**Tracked relationships** (Hasura): `invoices.vendor`, `.purchaseOrder`, `.duplicateFlag`,
-`.delayPrediction`, `.approvals[]`, `.payments[]`, `.lineItems[]`;
-`duplicate_flags.matchedInvoice`; `vendor_exposure.vendor`; and the inverse arrays on
-`vendors` / `purchase_orders`.
+**Tracked relationships** (Hasura): `invoices.vendor`, `.purchaseOrder`,
+`.approvals[]`, `.payments[]`, `.lineItems[]`; `vendor_exposure.vendor`; and the
+inverse arrays on `vendors` / `purchase_orders`.
+
+### Per-service private databases
+
+`duplicate_flags`, `delay_predictions`, `ml_drift_reports`, and
+`ml_retrain_events` are **not** in the shared `invoice_tracker` database —
+they live in ml-service's own `ml_db`, reached directly over psycopg
+(`services/ml-service/app/db.py`), never through Hasura's GraphQL API.
+Likewise `invoice_embeddings` lives in genai-service's own `genai_db`
+(`services/genai-service/app/db.py`). This mirrors `auth-service`'s existing
+isolation of `users`/`companies`/`invites` — each of these datastores is
+private to exactly one service, not shared through Hasura role permissions.
+
+Both `genai_db` and `ml_db` are *also* registered as read-only Hasura sources
+(`genai`, `ml` in the console's database list) purely for browsing —
+no role has any permission on them, so they're visible with the admin secret
+only, and genai-service/ml-service's own private connections remain the only
+way to actually read or write them.
+
+The one place this matters for the frontend: the invoice list/detail views
+used to get `duplicateFlag`/`delayPrediction` as a single Hasura relationship
+join. They still appear as the same GraphQL fields today, but the web app now
+fetches them from ml-service in a second, batched call and stitches them onto
+the invoice rows (`apps/web/server/predictions.ts`) — a deliberate tradeoff so
+the invoice list keeps working (minus predictions) if ml-service is down,
+rather than making it a hard dependency for every page load.
 
 ---
 
@@ -352,7 +392,7 @@ Version 3 metadata, in `hasura/metadata/`. Applied automatically by the
 | `finance_user` | all tables + view | insert/update `invoices`; insert/update `payments` | column-scoped inserts; no deletes |
 | `approver` | all tables + view | update only `status` / `acted_at` on **its own** `approvals` rows | row filter `approver = X-Hasura-User-Id` |
 | `admin` | everything (built-in) | everything | used server-side by the BFF for mutations and by ml / notification services |
-| `genai_readonly` | select-only, and only `invoices`, `vendors`, `duplicate_flags`, `delay_predictions` | none | the guardrail for genai-service |
+| `genai_readonly` | select-only, and only `invoices`, `vendors` | none | the guardrail for genai-service. Used to also cover `duplicate_flags`/`delay_predictions` directly — those moved to ml-service's private `ml_db` (see [Per-service private databases](#data-model)), so genai-service's "ask" feature can no longer answer questions that resolve to those two tables; it degrades to "I don't have that data" instead of erroring. |
 
 **No role can delete anything.**
 
@@ -394,7 +434,15 @@ Permitted for `finance_user` + `admin`. Used by the pre-insert upload flow.
   JWT against `HASURA_GRAPHQL_JWT_SECRET`, then for **reads** re-mints a short-lived
   role-scoped token so Hasura's own permissions apply; **mutations** run as admin but are
   gated by role in the resolver (`requireRole(...)`). `REQUIRE_AUTH=1` rejects
-  unauthenticated calls outright; unset keeps the demo permissive.
+  unauthenticated calls outright; unset keeps the demo permissive — but an
+  unauthenticated read is now still scoped to a single seed demo company via a
+  role-scoped JWT, **never** the raw admin secret, so it can't cross-tenant scan
+  (`apps/web/server/hasura.ts`'s `authHeaders()` — this was previously a real
+  cross-tenant read leak, fixed and covered by `apps/web/server/hasura.test.ts`).
+- **Audit log** — `audit_logs` (admin-only, no Hasura role permissions) records every
+  invalid/expired session, every `REQUIRE_AUTH` rejection, and every forbidden-role
+  attempt, from both the GraphQL BFF and the three REST routes (`bulk-upload`, `ocr`,
+  `payments/create-link`) that gate on role inline instead of through `requireRole`.
 - Frontend sessions refresh silently ~5 min before expiry; a tab left past expiry lands
   back on `/login`.
 
@@ -540,7 +588,11 @@ digest formatter, and JWT mint/verify/refresh.
 | `HASURA_GRAPHQL_ADMIN_SECRET` / `HASURA_ADMIN_SECRET` | `devsecret` | admin access |
 | `HASURA_ENDPOINT` | `http://localhost:8088/v1/graphql` (compose overrides host → service name) | services → Hasura |
 | `HASURA_GRAPHQL_JWT_SECRET` | `{"type":"HS256","key":"dev-…-min"}` | JWT sign/verify (Hasura + auth-service + genai + BFF) |
-| `ML_SERVICE_URL` / `ML_SERVICE_SCORE_URL` / `NOTIFICATION_SERVICE_URL` / `GENAI_SERVICE_URL` | compose service URLs | referenced by Hasura metadata |
+| `ML_SERVICE_URL` / `ML_SERVICE_SCORE_URL` / `NOTIFICATION_SERVICE_URL` / `GENAI_SERVICE_URL` / `OCR_SERVICE_URL` | compose service URLs | referenced by Hasura metadata and read directly by the web app's BFF |
+| `NEXT_PUBLIC_AUTH_URL` | `http://auth-service:8005` in compose | read server-side only by the web app's `api/{login,register,refresh,users,invites}` routes — never sent to the browser despite the name. **Inlined at Next.js build time** — a runtime override alone does nothing; the web service's Docker build passes it as a build arg (`infra/docker-compose.yml`'s `web.build.args`). |
+| `GENAI_PG_DATABASE_URL` / `ML_PG_DATABASE_URL` | `postgres://{genai,ml}_service:…@postgres:5432/{genai,ml}_db` | genai-service's/ml-service's own private databases — see [Per-service private databases](#data-model) |
+| `RABBITMQ_URL` | `amqp://guest:guest@rabbitmq:5672/` (compose); host-mapped `5673` outside Docker | ocr-service's bulk upload queue and the web app's outbound notification queue (`apps/web/server/queue.ts`) |
+| `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-me` | shared secret sent as `X-Internal-Token` on every service-to-service call; each service's `require_internal_token` dependency fails closed if unset |
 | `AZURE_OPENAI_ENDPOINT` / `_KEY` / `_DEPLOYMENT` / `_API_VERSION` | unset → offline / `2024-06-01` | genai-service LLM |
 | `NOTIFY_CHANNEL` | `log` | `log` / `slack` / `email` |
 | `SLACK_WEBHOOK_URL` | — | `NOTIFY_CHANNEL=slack` |
@@ -552,10 +604,12 @@ digest formatter, and JWT mint/verify/refresh.
 
 | Var | Default | Notes |
 |---|---|---|
-| `NEXT_PUBLIC_AUTH_URL` | `http://localhost:8095` | browser → auth-service (login/refresh) |
-| `HASURA_ENDPOINT` | `http://localhost:8088/v1/graphql` | **server-only** (BFF) |
+| `NEXT_PUBLIC_AUTH_URL` | `http://localhost:8095` | **server-only** despite the name — see the note in the compose table above |
+| `HASURA_ENDPOINT` | `http://localhost:8088/v1/graphql` | server-only (BFF) |
 | `HASURA_ADMIN_SECRET` | `devsecret` | server-only |
-| `GENAI_SERVICE_URL` | `http://localhost:8093` | server-only |
+| `GENAI_SERVICE_URL` / `ML_SERVICE_URL` / `NOTIFICATION_SERVICE_URL` | `http://localhost:{8093,8092,8094}` | server-only |
+| `INTERNAL_SERVICE_TOKEN` | must match `infra/.env`'s value | sent as `X-Internal-Token` on every call to ml/genai/notification/ocr-service |
+| `RABBITMQ_URL` | `amqp://guest:guest@localhost:5673/` | note the host-mapped port — `5673`, not RabbitMQ's default `5672` |
 | `HASURA_GRAPHQL_JWT_SECRET` | *(match Hasura + auth-service)* | BFF verifies session JWTs / mints role-scoped read tokens |
 | `REQUIRE_AUTH` | *(unset)* | `1` to reject missing/invalid session tokens outright |
 
