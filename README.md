@@ -634,7 +634,9 @@ This is a take-home / demo build. Deliberate shortcuts, each with a known ceilin
   earlier version of this BFF also fell back to the admin secret for *unauthenticated
   reads*, which bypassed every tenant's row filtering — that's fixed; see
   [Auth & JWTs](#auth--jwts).
-- **CORS is wildcard** on `auth-service` (no cookies are used there).
+- **`auth-service`'s CORS denies by default** — `AUTH_CORS_ORIGINS` unset means an
+  empty allow-list, not a `"*"` fallback (no cookies cross this boundary either way).
+  Set it to your real frontend origin(s) in a real deployment.
 - **`/extract-ocr` handles PDF text layers only** — scanned/image documents return
   `pending_review`; wiring a vision provider is left as a marked extension point.
 - **Ports are shifted** off the brief's defaults to avoid clashes on the dev machine
