@@ -9,6 +9,7 @@ dependencies = [
   "httpx>=0.27",
   "python-multipart>=0.0.12",
   "invoice-tracker-shared-types",
+  "pydantic>=2",
 ]
 
 [build-system]

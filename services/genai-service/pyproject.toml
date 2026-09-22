@@ -12,6 +12,7 @@ dependencies = [
   "pypdf>=5.1",
   "sentence-transformers>=3.0",
   "invoice-tracker-shared-types",
+  "pydantic>=2",
 ]
 
 [build-system]

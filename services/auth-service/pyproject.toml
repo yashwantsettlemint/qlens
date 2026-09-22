@@ -9,6 +9,7 @@ dependencies = [
   "invoice-tracker-shared-types",
   "psycopg[binary]>=3.1",
   "bcrypt>=4.1",
+  "pydantic>=2",
 ]
 
 [build-system]
