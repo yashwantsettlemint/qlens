@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { verifyHS256, type Claims } from "@/server/jwt";
 import { SESSION_COOKIE } from "@/server/auth";
 import { internalServiceHeaders } from "@/server/hasura";
+import { logSecurityEvent } from "@/server/audit";
 
 /**
  * BFF: proxies a document upload (PDF / image) to ocr-service /extract. Keeps
@@ -28,10 +29,21 @@ export async function POST(req: Request) {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (token) {
     claims = verifyHS256(token, JWT_SECRET);
-    if (!claims) return fail(401, "Your session has expired — sign in again.");
+    if (!claims) {
+      logSecurityEvent("invalid_session", { reason: "bad_or_expired_token", route: "ocr" });
+      return fail(401, "Your session has expired — sign in again.");
+    }
   }
-  if (REQUIRE_AUTH && !claims) return fail(401, "Sign in to continue.");
+  if (REQUIRE_AUTH && !claims) {
+    logSecurityEvent("auth_required_rejected", { route: "ocr" });
+    return fail(401, "Sign in to continue.");
+  }
   if (claims && !["finance_user", "admin"].includes(claims.role)) {
+    logSecurityEvent(
+      "forbidden_role",
+      { user: claims.user, role: claims.role, requiredRoles: ["finance_user", "admin"], route: "ocr" },
+      claims.companyId || null,
+    );
     return fail(403, `Adding invoices needs role finance_user or admin (you are ${claims.role}).`);
   }
 

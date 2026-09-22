@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { GraphQLError } from "graphql";
 import type { Claims } from "./jwt";
+import { logSecurityEvent } from "./audit";
 
 /** httpOnly cookie the session JWT is kept in — set/read only by the api/* routes. */
 export const SESSION_COOKIE = "it_session";
@@ -31,6 +32,11 @@ export function requireRole(...roles: string[]): void {
   const claims = currentClaims();
   if (!claims) return;
   if (!roles.includes(claims.role)) {
+    logSecurityEvent(
+      "forbidden_role",
+      { user: claims.user, role: claims.role, requiredRoles: roles },
+      claims.companyId || null,
+    );
     throw new GraphQLError(`Needs role: ${roles.join(" or ")} (you are ${claims.role})`, {
       extensions: { code: "FORBIDDEN" },
     });

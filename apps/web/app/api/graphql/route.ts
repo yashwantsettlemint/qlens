@@ -6,6 +6,7 @@ import { cookies } from "next/headers";
 import { resolvers } from "@/server/resolvers";
 import { requestContext, SESSION_COOKIE } from "@/server/auth";
 import { verifyHS256, type Claims } from "@/server/jwt";
+import { logSecurityEvent } from "@/server/audit";
 
 /**
  * BFF: the browser's Apollo client posts the frontend's own operations here
@@ -45,10 +46,12 @@ export async function POST(req: Request) {
   if (token) {
     claims = verifyHS256(token, JWT_SECRET);
     if (!claims) {
+      logSecurityEvent("invalid_session", { reason: "bad_or_expired_token" });
       return unauthenticated("Your session has expired or is invalid — sign in again.");
     }
   }
   if (REQUIRE_AUTH && !claims) {
+    logSecurityEvent("auth_required_rejected", { operationName });
     return unauthenticated("Sign in to continue.");
   }
 

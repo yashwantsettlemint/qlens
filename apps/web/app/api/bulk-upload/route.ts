@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { verifyHS256, type Claims } from "@/server/jwt";
 import { SESSION_COOKIE } from "@/server/auth";
 import { internalServiceHeaders } from "@/server/hasura";
+import { logSecurityEvent } from "@/server/audit";
 
 /**
  * BFF: proxies a multi-file document upload to ocr-service's RabbitMQ-backed
@@ -28,10 +29,21 @@ async function checkAuth(): Promise<{ error: Response | null; claims: Claims | n
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (token) {
     claims = verifyHS256(token, JWT_SECRET);
-    if (!claims) return { error: fail(401, "Your session has expired — sign in again."), claims: null };
+    if (!claims) {
+      logSecurityEvent("invalid_session", { reason: "bad_or_expired_token", route: "bulk-upload" });
+      return { error: fail(401, "Your session has expired — sign in again."), claims: null };
+    }
   }
-  if (REQUIRE_AUTH && !claims) return { error: fail(401, "Sign in to continue."), claims: null };
+  if (REQUIRE_AUTH && !claims) {
+    logSecurityEvent("auth_required_rejected", { route: "bulk-upload" });
+    return { error: fail(401, "Sign in to continue."), claims: null };
+  }
   if (claims && !["finance_user", "admin"].includes(claims.role)) {
+    logSecurityEvent(
+      "forbidden_role",
+      { user: claims.user, role: claims.role, requiredRoles: ["finance_user", "admin"], route: "bulk-upload" },
+      claims.companyId || null,
+    );
     return {
       error: fail(403, `Adding invoices needs role finance_user or admin (you are ${claims.role}).`),
       claims: null,
