@@ -5,7 +5,8 @@ text extraction), route them through approval, track payments and vendor exposur
 layer on two **XGBoost** models — **duplicate detection** and a **late-payment
 predictor** — plus an **LLM assistant** that answers plain-language questions over the
 data. A Next.js frontend sits on top; a Hasura GraphQL API over Postgres sits underneath;
-five small FastAPI services do the ingestion, scoring, explanation and alerting.
+six small FastAPI services (including OCR extraction) do the ingestion, scoring,
+explanation and alerting.
 
 The whole thing runs from `docker compose up`.
 
@@ -619,15 +620,26 @@ digest formatter, and JWT mint/verify/refresh.
 
 This is a take-home / demo build. Deliberate shortcuts, each with a known ceiling:
 
-- **`auth-service` is mock** — plaintext dev users, no real IdP, no password policy, no
-  lockout. Only `/login` and the JWT shape are meant to survive a real replacement.
-- **Service → Hasura calls use the admin secret** (with an `x-hasura-role` override) —
-  fine for trusted in-cluster services, not for anything internet-facing.
-- **CORS is wildcard** on `auth-service` (no cookies are used).
+- **`auth-service` is mock** — plaintext dev users, no real IdP. It does have a minimum
+  password length and a login lockout (5 failed attempts → 429 for 15 minutes,
+  migration `1730000000023_auth_lockout`), but there's still no real IdP behind it. Only
+  `/login` and the JWT shape are meant to survive a real replacement.
+- **Every backend service self-mints its own scoped Hasura JWT** (`ml_service`,
+  `genai_readonly`/`genai_writer`, `notifier`, `ocr_service`, `finance_user`) — none of
+  ingestion/ml/genai/notification/ocr use the raw admin secret. The **web BFF** still
+  does, for a small set of role-gated mutations whose frontend contract needs a write no
+  real role is granted (`{admin: true}` call sites in `server/resolvers.ts`, each gated
+  by `requireRole`/`requireCompanyId` first) — fine for a trusted in-cluster secret, not
+  for anything that should hand the secret itself to a browser (it never does). An
+  earlier version of this BFF also fell back to the admin secret for *unauthenticated
+  reads*, which bypassed every tenant's row filtering — that's fixed; see
+  [Auth & JWTs](#auth--jwts).
+- **CORS is wildcard** on `auth-service` (no cookies are used there).
 - **`/extract-ocr` handles PDF text layers only** — scanned/image documents return
   `pending_review`; wiring a vision provider is left as a marked extension point.
 - **Ports are shifted** off the brief's defaults to avoid clashes on the dev machine
-  (`5433`, `8088`, `8091–8095`); container-internal ports match the brief.
-- **`npm audit`** flags dev/build-time transitive deps and Next against advisory ranges
-  that the pinned `next@14.2.x` security backports already cover; `--force` would pull a
-  breaking major and isn't warranted.
+  (`5433`, `8088`, `8091–8096`, `5673`/`15673` for RabbitMQ, `3002` for the dockerized
+  frontend); container-internal ports match the brief.
+- **Next.js is on the current major** (`next@16`); `npm audit` may still flag dev/build-time
+  transitive deps against advisory ranges the pinned version's security backports
+  already cover — check the advisory before reaching for `--force`.
