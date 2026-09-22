@@ -9,6 +9,8 @@ insert_permissions:
   - role: finance_user
     permission:
       check: {}
+      set:
+        company_id: X-Hasura-Company-Id
       columns:
         - invoice_id
         - paid_at
@@ -17,16 +19,23 @@ select_permissions:
   - role: finance_user
     permission:
       columns: "*"
-      filter: {}
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      allow_aggregations: true
   - role: approver
     permission:
       columns: "*"
-      filter: {}
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      allow_aggregations: true
+  - role: company_admin
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      allow_aggregations: true
 update_permissions:
   - role: finance_user
     permission:
       columns:
         - paid_at
         - amount_paid
-      filter: {}
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
       check: {}

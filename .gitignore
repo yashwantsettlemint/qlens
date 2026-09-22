@@ -22,3 +22,6 @@ infra/.env
 
 services/ml-service/data/*.csv
 .gstack/
+
+# personal scratch notes, not project content
+cred.txt

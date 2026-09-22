@@ -1,0 +1,31 @@
+table:
+  name: customers
+  schema: public
+array_relationships:
+  - name: invoices
+    using:
+      foreign_key_constraint_on:
+        column: customer_id
+        table:
+          name: invoices
+          schema: public
+select_permissions:
+  - role: finance_user
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      allow_aggregations: true
+  - role: approver
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      allow_aggregations: true
+  - role: company_admin
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      allow_aggregations: true
+  - role: genai_readonly
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }

@@ -1,9 +1,10 @@
 import { cn } from "@/lib/cn";
-import { toneRule, type Tone } from "@/lib/status";
+import { toneClasses, type Tone } from "@/lib/status";
 
 /**
- * A row of summary figures divided by hairlines — deliberately not a set of
- * shadowed cards. A stat carrying a warning gets a 2px status-coloured top rule.
+ * A row of summary tiles. Each is a rounded card; one carrying a non-neutral
+ * `rule` is filled with that status tint (e.g. overdue = red) so it reads at a
+ * glance against its plain-white siblings.
  */
 const COLS = { 2: "sm:grid-cols-2", 3: "sm:grid-cols-3", 4: "sm:grid-cols-4" } as const;
 
@@ -14,16 +15,7 @@ export function StatStrip({
   children: React.ReactNode;
   cols?: keyof typeof COLS;
 }) {
-  return (
-    <div
-      className={cn(
-        "grid grid-cols-1 divide-y divide-line border border-line bg-surface sm:divide-x sm:divide-y-0",
-        COLS[cols],
-      )}
-    >
-      {children}
-    </div>
-  );
+  return <div className={cn("grid grid-cols-1 gap-3", COLS[cols])}>{children}</div>;
 }
 
 export function Stat({
@@ -37,17 +29,28 @@ export function Stat({
   hint?: React.ReactNode;
   rule?: Tone;
 }) {
+  const tinted = rule !== "neutral";
   return (
     <div
       className={cn(
-        "px-4 py-3.5",
-        rule !== "neutral" && "border-t-2",
-        rule !== "neutral" && toneRule[rule],
+        "rounded-xl border p-5",
+        tinted
+          ? cn(toneClasses[rule], "border-transparent")
+          : "border-line bg-surface shadow-card",
       )}
     >
-      <div className="text-xs text-ink-muted">{label}</div>
-      <div className="tabular mt-1 text-2xl font-medium text-ink">{value}</div>
-      {hint != null && <div className="mt-1 text-xs text-ink-muted">{hint}</div>}
+      <div className={cn("text-sm", tinted ? "opacity-80" : "text-ink-muted")}>{label}</div>
+      <div
+        className={cn(
+          "tabular mt-1.5 text-3xl font-semibold tracking-tight",
+          !tinted && "text-ink",
+        )}
+      >
+        {value}
+      </div>
+      {hint != null && (
+        <div className={cn("mt-1 text-xs", tinted ? "opacity-75" : "text-ink-muted")}>{hint}</div>
+      )}
     </div>
   );
 }

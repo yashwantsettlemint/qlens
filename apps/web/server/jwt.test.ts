@@ -47,13 +47,27 @@ describe("verifyHS256", () => {
 
 describe("signHS256 round-trips through verifyHS256", () => {
   it("re-mints a role-scoped token the verifier accepts", () => {
-    const claims: Claims = { sub: "priya", iat: now, exp: now + 3600, role: "approver", user: "priya" };
+    const claims: Claims = {
+      sub: "priya",
+      iat: now,
+      exp: now + 3600,
+      role: "approver",
+      user: "priya",
+      companyId: "00000000-0000-0000-0000-000000000001",
+    };
     const reverified = verifyHS256(signHS256(claims, SECRET), SECRET);
     expect(reverified).toMatchObject({ role: "approver", user: "priya" });
   });
 
   it("honours a short TTL", () => {
-    const claims: Claims = { sub: "x", iat: now, exp: now + 3600, role: "admin", user: "x" };
+    const claims: Claims = {
+      sub: "x",
+      iat: now,
+      exp: now + 3600,
+      role: "admin",
+      user: "x",
+      companyId: "00000000-0000-0000-0000-000000000001",
+    };
     expect(verifyHS256(signHS256(claims, SECRET, -1), SECRET)).toBeNull();
   });
 });

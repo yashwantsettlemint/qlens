@@ -19,6 +19,8 @@ export function CsvPreviewTable({
 }) {
   const valid = rows.filter((r) => !r.error && r.input);
   const validInputs = valid.map((r) => r.input!);
+  const MAX_VISIBLE = 500;
+  const visibleRows = rows.slice(0, MAX_VISIBLE);
   const [importInvoices, { data, loading }] = useMutation(ImportInvoicesMutation, {
     refetchQueries: ["Invoices", "DashboardStats"],
     awaitRefetchQueries: true,
@@ -42,7 +44,7 @@ export function CsvPreviewTable({
 
       {parseErrors.length > 0 && (
         <Callout tone="bad">
-          <ul className="list-inside list-disc space-y-0.5">
+          <ul className="max-h-40 list-inside list-disc space-y-0.5 overflow-y-auto">
             {parseErrors.map((e, i) => (
               <li key={i}>{e}</li>
             ))}
@@ -74,7 +76,7 @@ export function CsvPreviewTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {visibleRows.map((r) => (
               <tr
                 key={r.line}
                 className={cn("border-b border-line last:border-0", r.error && "bg-bad-bg/40")}
@@ -99,6 +101,13 @@ export function CsvPreviewTable({
           </tbody>
         </table>
       </div>
+
+      {rows.length > MAX_VISIBLE && (
+        <p className="text-xs text-ink-muted">
+          Showing the first {MAX_VISIBLE} of {rows.length} rows. All {valid.length} valid rows
+          still commit.
+        </p>
+      )}
     </div>
   );
 }

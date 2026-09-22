@@ -1,0 +1,27 @@
+[project]
+name = "ocr-service"
+version = "0.1.0"
+description = "CPU-only OCR + field extraction for digital and scanned invoices (PaddleOCR PP-StructureV3)"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "python-multipart>=0.0.12",
+  "httpx>=0.27",
+  "pymupdf>=1.24",
+  "opencv-python-headless>=4.10",
+  "numpy>=1.26",
+  "pillow>=10.4",
+  "paddleocr>=3.7,<4",
+  "paddlepaddle>=3.3,<3.4",   # CPU; 3.3.x verified — pin tight, paddle CPU is fragile across minors
+  "openai>=1.40",
+  "aio-pika>=9.4",
+  "invoice-tracker-shared-types",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]

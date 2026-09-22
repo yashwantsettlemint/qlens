@@ -1,0 +1,9 @@
+table:
+  name: invoice_embeddings
+  schema: public
+object_relationships:
+  - name: invoice
+    using:
+      foreign_key_constraint_on: invoice_id
+# No non-admin permissions: written by genai-service /embed (admin secret) via
+# upsert_invoice_embedding(); read only through match_invoice_embeddings().

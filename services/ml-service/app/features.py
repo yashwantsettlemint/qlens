@@ -17,6 +17,7 @@ FEATURE_NAMES: list[str] = [
     "day_of_month",
     "tax_fraction",
     "po_matched",
+    "is_receivable",
     *[f"dept_{d}" for d in DEPARTMENTS],
 ]
 
@@ -30,6 +31,7 @@ def assemble_features(
     invoice_day_of_month: int,
     tax_amount: float,
     po_matched: bool,
+    is_receivable: bool = False,
 ) -> dict[str, float]:
     feats = {
         "vendor_ontime_rate": float(max(0.0, min(1.0, vendor_ontime_rate))),
@@ -38,6 +40,7 @@ def assemble_features(
         "day_of_month": float(invoice_day_of_month),
         "tax_fraction": float(tax_amount) / float(amount) if amount else 0.0,
         "po_matched": 1.0 if po_matched else 0.0,
+        "is_receivable": 1.0 if is_receivable else 0.0,
     }
     for d in DEPARTMENTS:
         feats[f"dept_{d}"] = 1.0 if department == d else 0.0

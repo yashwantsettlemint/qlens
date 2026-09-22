@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMutation } from "@apollo/client";
 import { ReviewDuplicateMutation } from "@/graphql/operations/mutations";
 import { Button } from "@/components/ui/Button";
+import { ExplanationList } from "@/components/ui/ExplanationList";
 import { inr, fmtDate, pct } from "@/lib/format";
 import { reviewedStatusLabel } from "@/lib/status";
 import type { InvoiceDetail } from "@/lib/types";
@@ -15,8 +16,9 @@ export function DuplicateCallout({
   invoiceId: string;
   flag: NonNullable<InvoiceDetail["duplicateFlag"]>;
 }) {
-  const [review, { loading }] = useMutation(ReviewDuplicateMutation, {
+  const [review, { loading, error }] = useMutation(ReviewDuplicateMutation, {
     refetchQueries: ["InvoiceDetail"],
+    onError: () => {}, // shown inline below, not thrown
   });
   const match = flag.matchedInvoice;
   const set = (status: string) => review({ variables: { invoiceId, status } });
@@ -40,7 +42,7 @@ export function DuplicateCallout({
             >
               {match.invoiceNumber}
             </Link>{" "}
-            from {match.vendor.name} — {inr(match.amount + match.taxAmount)}, dated{" "}
+            from {match.vendor?.name ?? "the same party"} — {inr(match.amount + match.taxAmount)}, dated{" "}
             {fmtDate(match.invoiceDate)}.
           </>
         ) : (
@@ -51,6 +53,9 @@ export function DuplicateCallout({
       <p className="mt-1 text-xs text-ink-muted">
         Current status: {reviewedStatusLabel(flag.reviewedStatus)}
       </p>
+      {flag.reason && <p className="mt-1 text-xs text-ink-muted">{flag.reason}</p>}
+
+      <ExplanationList items={flag.explanation} />
 
       <div className="mt-3 flex gap-2">
         <Button
@@ -67,6 +72,8 @@ export function DuplicateCallout({
           Not a duplicate
         </Button>
       </div>
+
+      {error && <p className="mt-2 text-xs text-bad-fg">{error.message}</p>}
     </section>
   );
 }

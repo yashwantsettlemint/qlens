@@ -49,15 +49,22 @@ export function AskPanel() {
     if (!q || loading) return;
     setTurns((t) => [...t, { role: "user", text: q }]);
     setInput("");
-    const { data } = await runAsk({ variables: { prompt: q } });
-    setTurns((t) => [
-      ...t,
-      {
-        role: "assistant",
-        text: data?.ask.text ?? "No answer.",
-        invoices: (data?.ask.invoices ?? []) as InvoiceRow[],
-      },
-    ]);
+    try {
+      const { data, error } = await runAsk({ variables: { prompt: q } });
+      setTurns((t) => [
+        ...t,
+        {
+          role: "assistant",
+          text: data?.ask.text ?? (error ? `Couldn’t answer that: ${error.message}` : "No answer."),
+          invoices: (data?.ask.invoices ?? []) as InvoiceRow[],
+        },
+      ]);
+    } catch (e: any) {
+      setTurns((t) => [
+        ...t,
+        { role: "assistant", text: `Couldn’t reach the assistant: ${e?.message ?? e}` },
+      ]);
+    }
   }
 
   if (!open) return null;
@@ -79,13 +86,26 @@ export function AskPanel() {
             <IconAsk width={16} height={16} />
             Ask about your invoices
           </div>
-          <button
-            onClick={() => setOpen(false)}
-            aria-label="Close"
-            className="text-genai/70 hover:text-genai"
-          >
-            <IconClose width={16} height={16} />
-          </button>
+          <div className="flex items-center gap-3">
+            {turns.length > 0 && (
+              <button
+                onClick={() => {
+                  setTurns([]);
+                  setInput("");
+                }}
+                className="text-xs text-genai/70 hover:text-genai"
+              >
+                Clear chat
+              </button>
+            )}
+            <button
+              onClick={() => setOpen(false)}
+              aria-label="Close"
+              className="text-genai/70 hover:text-genai"
+            >
+              <IconClose width={16} height={16} />
+            </button>
+          </div>
         </header>
 
         <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
@@ -194,12 +214,12 @@ function AskInvoiceList({
                 >
                   {inv.invoiceNumber}
                 </Link>
-                <div className="text-ink-muted">{inv.vendor.name}</div>
+                <div className="text-ink-muted">{inv.vendor?.name ?? inv.customer?.name}</div>
               </td>
               <td className="tabular px-2 py-1.5 text-right">{inr(inv.amount + inv.taxAmount)}</td>
               <td className="px-2 py-1.5">
                 <div className="flex items-center justify-end gap-1">
-                  <RiskDot probability={inv.delayPrediction?.delayProbability} />
+                  <RiskDot pred={inv.delayPrediction} />
                   {inv.duplicateFlag && <DuplicateBadge />}
                   <ApprovalBadge status={inv.approvalStatus} />
                   <PaymentBadge status={inv.paymentStatus} />

@@ -95,12 +95,17 @@ export function DataTable<T>({
   }
 
   return (
-    <div className={cn("overflow-x-auto border border-line bg-surface", className)}>
+    <div
+      className={cn(
+        "overflow-x-auto rounded-xl border border-line bg-surface shadow-card",
+        className,
+      )}
+    >
       <table className="w-full border-collapse text-sm">
         <thead className="sticky top-0 z-10 bg-surface">
           <tr className="border-b border-line text-left text-xs text-ink-muted">
             {selectable && (
-              <th className="w-9 px-3 py-2">
+              <th className="w-9 px-4 py-3">
                 <input
                   type="checkbox"
                   aria-label="Select all rows"
@@ -116,7 +121,7 @@ export function DataTable<T>({
                   key={c.key}
                   style={c.width ? { width: c.width } : undefined}
                   className={cn(
-                    "px-3 py-2 font-medium",
+                    "px-4 py-3 font-medium",
                     c.align === "right" && "text-right",
                   )}
                 >
@@ -154,7 +159,7 @@ export function DataTable<T>({
             <tr>
               <td
                 colSpan={columns.length + (selectable ? 1 : 0)}
-                className="px-3 py-10 text-center text-sm text-ink-muted"
+                className="px-4 py-12 text-center text-sm text-ink-muted"
               >
                 {empty ?? "Nothing to show."}
               </td>
@@ -173,7 +178,7 @@ export function DataTable<T>({
                 onClick={href ? () => router.push(href) : undefined}
               >
                 {selectable && (
-                  <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       aria-label={`Select ${id}`}
@@ -186,7 +191,7 @@ export function DataTable<T>({
                   <td
                     key={c.key}
                     className={cn(
-                      "px-3 py-2 align-middle",
+                      "px-4 py-3 align-middle",
                       c.align === "right" && "text-right",
                     )}
                   >

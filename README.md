@@ -1,115 +1,579 @@
 # Invoice Processing & Vendor Payment Tracker
 
-Monorepo.
+An internal accounts-payable tool: ingest supplier invoices (manual entry, CSV, or PDF
+text extraction), route them through approval, track payments and vendor exposure, and
+layer on two **XGBoost** models — **duplicate detection** and a **late-payment
+predictor** — plus an **LLM assistant** that answers plain-language questions over the
+data. A Next.js frontend sits on top; a Hasura GraphQL API over Postgres sits underneath;
+five small FastAPI services do the ingestion, scoring, explanation and alerting.
+
+The whole thing runs from `docker compose up`.
+
+---
+
+## Contents
+
+- [What it does](#what-it-does)
+- [Architecture](#architecture)
+- [Repo layout](#repo-layout)
+- [Quickstart](#quickstart)
+- [Services reference](#services-reference)
+- [Data model](#data-model)
+- [Hasura metadata](#hasura-metadata-roles-triggers-actions-cron)
+- [Auth & JWTs](#auth--jwts)
+- [The models](#the-models)
+- [The GenAI service](#the-genai-service)
+- [Frontend](#frontend)
+- [Tests & CI](#tests--ci)
+- [Configuration reference](#configuration-reference)
+- [Not for production](#not-for-production)
+
+---
+
+## What it does
+
+**Invoice lifecycle**
+
+- Capture invoices from three sources: manual form, CSV upload (with a validated
+  per-row preview before commit), and PDF upload (text-layer extraction to structured
+  fields).
+- Approval workflow — `pending → approved / rejected`, recorded as an approval timeline
+  per invoice. Approve/reject is role-gated (`approver` / `admin`).
+- Payments — record a payment against an invoice; payment status is `unpaid`, `paid`, or
+  effective `overdue` (unpaid past due date).
+- A daily cron sweeps unpaid past-due invoices to `overdue` and sends a vendor-grouped
+  digest (log / Slack / email).
+
+**Analytics & assistance**
+
+- **Duplicate detection** — on every invoice insert/update, an XGBoost classifier
+  scores the invoice against the same party's other invoices over pairwise features
+  (amount/tax gaps, date proximity, fuzzy invoice-number similarity, shared PO,
+  department) and writes a `duplicate_flags` row above a tuned probability threshold.
+  Reviewers confirm or clear each flag — those decisions are the labels for the next
+  retrain. A synchronous pre-insert check is also exposed as a Hasura action for the
+  upload flow.
+- **Late-payment prediction** — an XGBoost classifier (probability late) + regressor
+  (days late) score each invoice; results land in `delay_predictions` and surface as a
+  colour-coded risk dot with a plain-language note.
+- Both models are **required**: if the trained `.pkl` is missing, ml-service returns
+  **503** rather than falling back to a heuristic or rule check. The Docker image
+  trains both at build time.
+- **Ask panel** — a slide-over on every screen. Questions ("which invoices are overdue?",
+  "high-risk invoices this month") are answered from live data: an LLM picks a query over
+  a small whitelist, or an offline keyword router does when no LLM is configured.
+
+**Dashboard**
+
+- Pending / overdue counts and amounts, total vendor exposure, a click-to-filter
+  vendor-exposure bar chart, and pending + overdue invoice tables. `admin` sees an extra
+  block (approved-unpaid, paid-last-30, rejected count, avg days to pay).
+- Per-vendor view: invoices, outstanding, average delay, on-time %.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+    subgraph Browser
+        UI["Next.js app (Apollo Client)<br/>graphql/schema.graphql"]
+    end
+
+    UI -- "login / refresh" --> AUTH["auth-service<br/>:8095"]
+    UI -- "POST /api/graphql (session JWT)" --> BFF["Next server route<br/>app/api/graphql + server/resolvers.ts"]
+
+    BFF -- "reads: role-scoped JWT<br/>mutations: admin secret (role-gated)" --> HASURA["Hasura GraphQL Engine<br/>:8088"]
+    BFF -- "ask()" --> GENAI["genai-service :8093<br/>(as genai_readonly)"]
+
+    HASURA --> PG[("Postgres :5433<br/>8 tables + vendor_exposure view")]
+    GENAI -- "whitelisted queries" --> HASURA
+
+    HASURA -- "event trigger: invoices INSERT/UPDATE<br/>POST /score" --> ML["ml-service :8092"]
+    HASURA -- "action: checkDuplicateSync<br/>POST /check-duplicate" --> ML
+    ML -- "writes duplicate_flags + delay_predictions (admin)" --> HASURA
+
+    HASURA -- "cron 02:00 UTC<br/>POST /overdue-sweep" --> NOTIFY["notification-service :8094"]
+    NOTIFY -- "bulk mark overdue (admin)" --> HASURA
+    NOTIFY -- "digest" --> CHAN["log / Slack / email"]
+
+    INGEST["ingestion-service :8091"] -- "validate then insert (as finance_user)<br/>— each insert fires the event trigger" --> HASURA
+```
+
+**Request flow, in words:**
+
+1. The browser only ever talks to two origins: the Next.js app itself and `auth-service`
+   (for login). It never holds the Hasura admin secret.
+2. Every operation POSTs to
+   `/api/graphql`, a Next server route (BFF). It verifies the session JWT, then
+   `server/resolvers.ts` runs the operation against Hasura: **reads** with a short-lived
+   JWT re-minted for the signed-in user's role (Hasura's own row/column permissions
+   apply), **mutations** with the admin secret but gated by role in the resolver. The BFF
+   also translates camelCase ⇄ snake_case and computes derived fields (`daysOverdue`,
+   effective `OVERDUE`, the `*Stats` aggregates).
+4. Hasura is the single writer to Postgres. Two Hasura hooks call `ml-service`
+   (an async **event trigger** on `invoices` writes scores back; a synchronous **action**
+   does a pre-insert duplicate check). A **cron trigger** calls `notification-service`
+   daily.
+5. `ingestion-service` is a standalone ingestion API (CSV / manual) — it validates and
+   then inserts through Hasura as `finance_user`, so ingested invoices take the exact same
+   permission + trigger path as anything else.
+
+---
+
+## Repo layout
 
 ```
-apps/web/                  Next.js frontend (see apps/web/README.md)
-hasura/                    Postgres migrations, Hasura metadata, seeds
-infra/docker-compose.yml   full stack: postgres + hasura + seed + 5 FastAPI services
-packages/shared-types/     Python enums/constants + Hasura JWT helper, shared across services
+apps/web/                      Next.js 14 (App Router) + TypeScript + Tailwind + Apollo Client
+  app/                         routes: (app)/ dashboard, invoices, vendors, upload; /login; /api/graphql (BFF)
+  graphql/schema.graphql       the GraphQL contract — codegen and the BFF resolvers share it
+  server/                      BFF only: Hasura-backed resolvers, role-scoped JWT mint, HS256 verify, role gate
+  lib/                         business logic (format, status colours, risk thresholds, CSV, validation)
+  components/                  ui/ primitives, invoice/, upload/, layout/, ask/
+
+hasura/
+  migrations/default/          schema (one init migration: 9 tables/view + indexes)
+  metadata/                    tracked tables, relationships, permissions, event trigger, action, cron
+  seeds/default/               small demo dataset (fixed UUIDs, re-runnable)
+
 services/
-  auth-service/            mock login -> Hasura-shaped JWTs (dev only)
-  ingestion-service/       CSV / manual invoice ingestion -> Hasura as finance_user
-  ml-service/              rule-based duplicate detection + XGBoost delay prediction
-  genai-service/           LLM summaries / explanations, scoped to genai_readonly
-  notification-service/    daily overdue sweep + digest
+  auth-service/                mock login → Hasura-shaped HS256 JWTs (dev only)          host :8095
+  ingestion-service/           CSV / manual invoice ingestion → Hasura as finance_user   host :8091
+  ml-service/                  XGBoost duplicate detection + XGBoost delay prediction    host :8092
+  genai-service/               LLM summaries / explanations / OCR, scoped to genai_readonly  host :8093
+  notification-service/        daily overdue sweep + digest (log / slack / email)        host :8094
+
+packages/shared-types/         Python enums/constants (match the SQL schema) + the Hasura JWT mint/verify helper
+
+infra/
+  docker-compose.yml           full stack: postgres + hasura + seed + the FastAPI services
+  .env.example                 copy to infra/.env
 ```
 
-## Bring up the backend
+Each service and `apps/web` has its own `README.md` with the endpoint-level detail.
 
-```bash
-cp infra/.env.example infra/.env
-docker compose -f infra/docker-compose.yml up -d      # first run builds the images (ml-service trains a model at build time, ~3 min)
-```
+---
 
-| Service | URL (host) | Notes |
-|---|---|---|
-| Postgres | `localhost:5433` | |
-| Hasura | `http://localhost:8088` | console; `x-hasura-admin-secret: devsecret` |
-| auth-service | `http://localhost:8095` | `POST /login` `{username,password}` |
-| ingestion-service | `http://localhost:8091` | |
-| ml-service | `http://localhost:8092` | `/score`, `/check-duplicate` |
-| genai-service | `http://localhost:8093` | `/summarize`, `/explain-duplicate`, `/extract-ocr` (PDF text layer) |
-| notification-service | `http://localhost:8094` | `/overdue-sweep` — `NOTIFY_CHANNEL` = `log` / `slack` / `email` |
+## Quickstart
 
-(Host ports are shifted off 5432/8080/8001-8004 to avoid clashes on this machine;
-container-internal ports are the brief's 8001-8005.)
-
-Migrations + metadata apply automatically (`cli-migrations-v3` image); the `seed` one-shot
-then loads `hasura/seeds/default/` (truncate + reload, safe to re-run:
-`docker compose up -d seed`). Tear down: `docker compose -f infra/docker-compose.yml down`
-(`-v` also drops the DB volume).
-
-## Hasura metadata
-
-- All 8 tables + `vendor_exposure` view, tracked, with relationships
-  (`invoices.vendor / .purchaseOrder / .duplicateFlag / .delayPrediction / .approvals / .payments`, …).
-- Roles: `finance_user` (read all; insert/update invoices + payments), `approver`
-  (read all; update only `status`/`acted_at` on their own `approvals` rows via
-  `X-Hasura-User-Id`), `admin` (built-in), `genai_readonly` (select-only, and only on
-  `invoices`, `vendors`, `duplicate_flags`, `delay_predictions`). No deletes for anyone.
-- Event trigger `invoice_ml_score` on `invoices` INSERT + UPDATE of `amount|vendor_id|department`
-  → `ML_SERVICE_SCORE_URL`, 3 retries (Hasura retries are fixed-interval, `interval_sec: 15`).
-- Action `checkDuplicateSync(invoice) → DuplicateCheckResult` (synchronous) →
-  `{{ML_SERVICE_URL}}/check-duplicate`, for `finance_user` + `admin`.
-- Cron `overdue_sweep_daily` (02:00 UTC) → `{{NOTIFICATION_SERVICE_URL}}/overdue-sweep`.
-
-## Auth (JWT)
-
-`auth-service` signs HS256 tokens with `HASURA_GRAPHQL_JWT_SECRET` carrying the
-`https://hasura.io/jwt/claims` block (`POST /login`; `POST /refresh` re-issues while the
-token is still valid). Dev users: `kavya/kavya` (finance_user), `priya.nair/priya`
-(approver), `anjali.rao/anjali` (admin), `genai-bot/genai` (genai_readonly).
-`ml-service` / `notification-service` write as admin (service token); `genai-service`
-self-mints a `genai_readonly` token (never the admin secret). The web BFF re-mints a
-short-lived role-scoped token per request so **reads** run as the signed-in user's role;
-its **mutations** stay admin, gated by role in the route (`REQUIRE_AUTH=1` rejects
-unauthenticated calls outright).
-
-```bash
-TOKEN=$(curl -s localhost:8095/login -d '{"username":"kavya","password":"kavya"}' -H 'content-type: application/json' | jq -r .access_token)
-curl -s localhost:8088/v1/graphql -H "Authorization: Bearer $TOKEN" -d '{"query":"{ invoices(limit:1){invoice_number} }"}'
-```
-
-## Run the frontend against the real backend
-
-`apps/web` keeps its own GraphQL contract (`graphql/schema.graphql`). By default it runs
-that schema in-browser against mock data. Set `NEXT_PUBLIC_BACKEND=hasura` and the browser
-instead posts the same operations to `/api/graphql`, a Next server route that resolves them
-against Hasura + genai-service (`apps/web/server/resolvers.ts`) — the admin secret stays
-server-side, and no component / operation / codegen output changes.
+### Option A — frontend only, no backend (fastest)
 
 ```bash
 cd apps/web
-cp .env.example .env.local          # NEXT_PUBLIC_BACKEND=hasura, HASURA_ENDPOINT, GENAI_SERVICE_URL
-npm run dev                         # http://localhost:3000 (or next free port)
+npm install
+npm run codegen        # generate typed GraphQL hooks
+npm run dev            # http://localhost:3000
 ```
 
-The BFF route translates: camelCase ⇄ snake_case, `PENDING`/`UNPAID` ⇄ `pending`/`unpaid`,
-`daysOverdue` + effective `OVERDUE` computed, `dashboardStats` / `vendorStats` /
-`vendorExposure` via `invoices_aggregate`, `ask` proxied to genai-service `/summarize`.
+### Option B — full stack
 
-## Tests / CI
+```bash
+cp infra/.env.example infra/.env
+docker compose -f infra/docker-compose.yml up -d
+```
 
-`.github/workflows/ci.yml` runs on every push: `apps/web` (`typecheck`, `lint`, `vitest`)
-and each service's `tests/test_*.py` check script. Run locally:
+First run builds the images; **`ml-service` trains both models at build time (~3 min)** so
+`/score` works out of the box (it 503s without them). Migrations + metadata apply automatically
+(`cli-migrations-v3` image); a one-shot `seed` container then loads
+`hasura/seeds/default/` (truncate + reload — safe to re-run with
+`docker compose -f infra/docker-compose.yml up -d seed`).
+
+| Service | Host URL | Notes |
+|---|---|---|
+| Postgres | `localhost:5433` | container-internal `5432` |
+| Hasura | `http://localhost:8088` | console open; `x-hasura-admin-secret: devsecret` |
+| auth-service | `http://localhost:8095` | `POST /login {username,password}` |
+| ingestion-service | `http://localhost:8091` | `/upload/csv`, `/upload/csv/commit`, `/upload/manual` |
+| ml-service | `http://localhost:8092` | `/score`, `/check-duplicate` |
+| genai-service | `http://localhost:8093` | `/summarize`, `/explain-duplicate`, `/extract-ocr` |
+| notification-service | `http://localhost:8094` | `/overdue-sweep` |
+
+Host ports are shifted off `5432` / `8080` / `8001–8005` to avoid clashes; container-internal
+ports are `8001–8005` as in the brief. Tear down with
+`docker compose -f infra/docker-compose.yml down` (add `-v` to drop the DB volume).
+
+Smoke test the JWT path:
+
+```bash
+TOKEN=$(curl -s localhost:8095/login -d '{"username":"kavya","password":"kavya"}' \
+  -H 'content-type: application/json' | jq -r .access_token)
+curl -s localhost:8088/v1/graphql -H "Authorization: Bearer $TOKEN" \
+  -d '{"query":"{ invoices(limit:1){ invoice_number } }"}'
+```
+
+### Option C — frontend against the real backend
+
+Bring up Option B, then:
+
+```bash
+cd apps/web
+cp .env.example .env.local          # fill in the Hasura/auth values
+npm run dev
+```
+
+Relevant `.env.local` keys:
+
+```
+NEXT_PUBLIC_AUTH_URL=http://localhost:8095          # browser → auth-service
+HASURA_ENDPOINT=http://localhost:8088/v1/graphql    # server-only from here down
+HASURA_ADMIN_SECRET=devsecret
+HASURA_GRAPHQL_JWT_SECRET={"type":"HS256","key":"…"} # same value Hasura + auth-service use
+GENAI_SERVICE_URL=http://localhost:8093
+REQUIRE_AUTH=                                        # set 1 to reject unauthenticated calls
+```
+
+Sign in at `/login`. Dev users below. The browser's Apollo client posts the frontend's
+own operations to `/api/graphql`; no component, operation, or codegen output differs
+between the two modes.
+
+---
+
+## Services reference
+
+All five are FastAPI apps, Python 3.11, one `pyproject.toml` each, and all depend on
+`packages/shared-types`. Every service has a `GET /health` and a `tests/test_*.py`
+plain-assertion check script (no framework).
+
+### auth-service — `:8095` → container `:8005`
+
+Mock login. Issues Hasura-shaped HS256 JWTs signed with `HASURA_GRAPHQL_JWT_SECRET`
+(the same value Hasura verifies against). No real IdP.
+
+| Method | Path | Body / header | Returns |
+|---|---|---|---|
+| `POST` | `/login` | `{username, password}` | `{access_token, token_type, expires_in, role}` |
+| `POST` | `/refresh` | `Authorization: Bearer <token>` | a fresh token, while the old one is still valid |
+| `GET` | `/me` | `Authorization: Bearer <token>` | decoded claims |
+
+Dev users (override with `AUTH_USERS` JSON):
+
+| Username | Password | Role |
+|---|---|---|
+| `kavya` | `kavya` | `finance_user` |
+| `priya.nair` | `priya` | `approver` |
+| `rahul.menon` | `rahul` | `approver` |
+| `anjali.rao` | `anjali` | `admin` |
+| `genai-bot` | `genai` | `genai_readonly` |
+
+### ingestion-service — `:8091` → container `:8001`
+
+CSV / manual invoice ingestion. Validates rows, then commits through Hasura as
+`finance_user` in one batched `insert_invoices` — so each ingested invoice fires the
+`invoice_ml_score` event trigger like any other. Plain `csv` module, no pandas.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/upload/csv` | multipart `file` (.csv) | `{summary, rows:[{row, valid, errors, data}]}` — **no commit** |
+| `POST` | `/upload/csv/commit` | `{rows:[…], created_by}` | `{committed, invoices:[{id, invoice_number}]}` (re-validates; 422 if any row is invalid — nothing commits) |
+| `POST` | `/upload/manual` | one invoice | `{committed, invoice}` |
+
+CSV columns (header case / spacing / common synonyms tolerated):
+`invoice_number, vendor, department, invoice_date, due_date, amount, tax_amount, source, po_number`.
+`vendor` is a **name**, resolved to an id against Hasura; `po_number` optional.
+Validation: required fields present, vendor + PO resolve, `department` in the known set,
+dates `YYYY-MM-DD`, `due_date ≥ invoice_date`, amounts numeric and non-negative,
+`source ∈ {manual, csv, ocr}`. Messages are human-readable, per row.
+
+### ml-service — `:8092` → container `:8002`
+
+| Method | Path | Caller | Returns |
+|---|---|---|---|
+| `POST` | `/score` | Hasura **event trigger** `invoice_ml_score` | runs both checks, writes `duplicate_flags` + `delay_predictions` back, returns what it wrote |
+| `POST` | `/check-duplicate` | Hasura **action** `checkDuplicateSync` (synchronous, pre-insert) | `{isDuplicate, matchedInvoiceId, confidenceScore, method, reason}` |
+
+See [The models](#the-models).
+
+### genai-service — `:8093` → container `:8003`
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/summarize` | `{question}` | `{summary, invoice_ids, row_count, query}` |
+| `POST` | `/explain-duplicate` | `{invoice_id}` | `{explanation, confidence_score, method, matched_invoice_id}` — explains the **existing** flag, never re-derives |
+| `POST` | `/extract-ocr` | multipart PDF | `{status, source, fields:{name:{value, confidence}}}` — reads the PDF **text layer** (LLM or offline regex); scanned/image PDFs → `status: "pending_review"` |
+| `GET` | `/health` | — | `{status, llm: "offline" \| "azure-openai"}` |
+
+Authenticates to Hasura **only** as `genai_readonly` via a self-minted JWT (never the
+admin secret), and only through the whitelist in `app/whitelist.py` — four tables, a
+fixed field list, a fixed operator set. See [The GenAI service](#the-genai-service).
+
+### notification-service — `:8094` → container `:8004`
+
+| Method | Path | Returns |
+|---|---|---|
+| `POST` | `/overdue-sweep` | `{ran_at, as_of, swept, invoice_ids, digest_subject}` |
+
+Finds `payment_status = 'unpaid' AND due_date < today`, sets them to `overdue` in one
+bulk `update_invoices` (as admin), builds a vendor-grouped digest, and sends it.
+`NOTIFY_CHANNEL` selects `log` (stdout, default), `slack` (incoming webhook), or `email`
+(SMTP). A partially-configured Slack/email channel logs a warning and falls back to
+stdout rather than raising.
+
+---
+
+## Data model
+
+One migration: [`hasura/migrations/default/1730000000000_init/up.sql`](hasura/migrations/default/1730000000000_init/up.sql).
+UUID PKs (`gen_random_uuid()`), `NUMERIC(14,2)` money, `TIMESTAMPTZ` timestamps.
+Enum-like columns are plain `TEXT` with app-level values kept in
+[`packages/shared-types`](packages/shared-types/shared_types/__init__.py).
+
+| Table | Key columns | Notes |
+|---|---|---|
+| `vendors` | `name`, `tax_id`, `payment_terms_days` | |
+| `purchase_orders` | `po_number`, `vendor_id →`, `amount`, `department`, `status` | status: `open` / `partial` / `closed` |
+| `invoices` | `invoice_number`, `vendor_id →`, `po_id →?`, `invoice_date`, `due_date`, `amount`, `tax_amount`, `department`, `approval_status`, `payment_status`, `source`, `created_by` | approval: `pending`/`approved`/`rejected`; payment: `unpaid`/`paid`/`overdue`; source: `manual`/`csv`/`ocr` |
+| `invoice_line_items` | `invoice_id →`, `description`, `quantity`, `unit_price`, `line_amount` | `ON DELETE CASCADE` |
+| `approvals` | `invoice_id →`, `approver`, `level`, `status`, `acted_at` | one row per approval step |
+| `payments` | `invoice_id →`, `paid_at`, `amount_paid` | |
+| `duplicate_flags` | `invoice_id →`, `matched_invoice_id →?`, `confidence_score`, `method`, `reviewed_status` | reviewed: `unreviewed` / `confirmed_duplicate` / `false_positive` |
+| `delay_predictions` | `invoice_id →`, `delay_probability`, `predicted_delay_days`, `model_version` | one current row per invoice (writer deletes + re-inserts) |
+| `vendor_exposure` *(view)* | `vendor_id`, `payment_status`, `SUM(amount)`, `COUNT(*)` | vendor-wise exposure, read by the dashboard |
+
+Indexes cover the queries the dashboard, overdue sweep and ML lookups actually hit
+(`invoices(vendor_id)`, `invoices(payment_status, due_date)`, `invoices(approval_status)`,
+and `invoice_id` on each child table).
+
+**Tracked relationships** (Hasura): `invoices.vendor`, `.purchaseOrder`, `.duplicateFlag`,
+`.delayPrediction`, `.approvals[]`, `.payments[]`, `.lineItems[]`;
+`duplicate_flags.matchedInvoice`; `vendor_exposure.vendor`; and the inverse arrays on
+`vendors` / `purchase_orders`.
+
+---
+
+## Hasura metadata (roles, triggers, actions, cron)
+
+Version 3 metadata, in `hasura/metadata/`. Applied automatically by the
+`graphql-engine:*.cli-migrations-v3` image.
+
+### Roles & permissions
+
+| Role | Read | Write | Notes |
+|---|---|---|---|
+| `finance_user` | all tables + view | insert/update `invoices`; insert/update `payments` | column-scoped inserts; no deletes |
+| `approver` | all tables + view | update only `status` / `acted_at` on **its own** `approvals` rows | row filter `approver = X-Hasura-User-Id` |
+| `admin` | everything (built-in) | everything | used server-side by the BFF for mutations and by ml / notification services |
+| `genai_readonly` | select-only, and only `invoices`, `vendors`, `duplicate_flags`, `delay_predictions` | none | the guardrail for genai-service |
+
+**No role can delete anything.**
+
+### Event trigger — `invoice_ml_score`
+
+On `invoices` INSERT and on UPDATE of `amount` / `vendor_id` / `department`. Calls
+`ML_SERVICE_SCORE_URL` (`POST /score`). 3 retries, fixed 15 s interval, 60 s timeout.
+
+### Action — `checkDuplicateSync`
+
+`checkDuplicateSync(invoice: InvoiceCheckInput!) → DuplicateCheckResult!` — synchronous,
+`POST {{ML_SERVICE_URL}}/check-duplicate`, 15 s timeout, forwards client headers.
+Permitted for `finance_user` + `admin`. Used by the pre-insert upload flow.
+
+### Cron — `overdue_sweep_daily`
+
+`0 2 * * *` (02:00 UTC) → `POST {{NOTIFICATION_SERVICE_URL}}/overdue-sweep`.
+2 retries, 60 s apart, 6 h tolerance.
+
+---
+
+## Auth & JWTs
+
+- **`auth-service`** signs HS256 tokens carrying the `https://hasura.io/jwt/claims`
+  block (`x-hasura-default-role`, `x-hasura-allowed-roles`, `x-hasura-user-id`).
+  `iat` is backdated 60 s to absorb clock skew. `POST /refresh` re-issues while a token
+  is still valid; once expired, log in again.
+- **The single JWT helper** lives in
+  [`packages/shared-types/shared_types/jwt.py`](packages/shared-types/shared_types/jwt.py) —
+  used by `auth-service` (issues tokens for humans) and by `genai-service` (self-mints a
+  300 s `genai_readonly` token for its own Hasura calls).
+- **`ml-service`** and **`notification-service`** call Hasura as **admin** (an
+  admin-scoped service token, per the brief) with an `x-hasura-role` override where a
+  narrower role is wanted.
+- **`ingestion-service`** calls Hasura with the admin secret plus `x-hasura-role: finance_user`
+  (fine for a trusted in-cluster service; swap for a minted `finance_user` JWT if ever
+  exposed outside the cluster — noted in the code).
+- **The web BFF** ([`apps/web/server/`](apps/web/server/)) verifies the browser's session
+  JWT against `HASURA_GRAPHQL_JWT_SECRET`, then for **reads** re-mints a short-lived
+  role-scoped token so Hasura's own permissions apply; **mutations** run as admin but are
+  gated by role in the resolver (`requireRole(...)`). `REQUIRE_AUTH=1` rejects
+  unauthenticated calls outright; unset keeps the demo permissive.
+- Frontend sessions refresh silently ~5 min before expiry; a tab left past expiry lands
+  back on `/login`.
+
+---
+
+## The models
+
+### Duplicate detection — XGBoost
+
+[`services/ml-service/app/duplicates.py`](services/ml-service/app/duplicates.py) +
+[`app/dup_features.py`](services/ml-service/app/dup_features.py). An `XGBClassifier`
+scores the candidate against each of the same party's other invoices over 13 pairwise
+features — amount/tax relative gaps and exact-match flags, day gap and same-month,
+five `rapidfuzz` invoice-number similarities, shared/both-have PO, department match —
+built by the **one funnel** `pair_features` (train and serve identical). The highest
+`P(duplicate)` above the pickled threshold (default `0.5`, deliberately low — a missed
+duplicate costs more than a dismissed flag) becomes a `duplicate_flags` row with
+`method="ml"`. Training data is synthetic pairs by default, or human-reviewed
+`duplicate_flags` via `--from-hasura`. No `models/duplicate_model.pkl` → **503**.
+
+### Late-payment prediction — XGBoost
+
+[`services/ml-service/app/delay.py`](services/ml-service/app/delay.py) + [`ml/`](services/ml-service/ml/).
+`XGBClassifier` (probability of paying late) + `XGBRegressor` (days late).
+
+Features go through **one funnel** —
+[`app/features.py::assemble_features`](services/ml-service/app/features.py) — used
+identically at train and serve time, so there is no skew: vendor historical on-time rate,
+`log1p(amount)`, approval-chain length, day-of-month, tax fraction, PO-matched flag, and
+a department one-hot.
+
+```bash
+cd services/ml-service
+python -m ml.generate_synthetic_training_data --rows 3000   # → data/synthetic_invoices.csv
+python -m ml.train                                          # → models/delay_model.pkl
+python -m ml.train --from-hasura                            # train on real paid invoices instead
+python -m ml.predict '{"amount":250000,"tax_amount":45000,"department":"IT","invoice_date":"2026-09-28","po_id":null}' --vendor-ontime 0.5
+python -m ml.generate_synthetic_duplicate_pairs --rows 6000 && python -m ml.train_duplicates  # → models/duplicate_model.pkl
+```
+
+No `models/delay_model.pkl` → `/score` returns **503** (`ModelUnavailable`) — no
+heuristic fallback. The Docker image trains both models at build time. The frontend
+renders the probability as a green/amber/red dot at thresholds `0.34` / `0.67`
+([`apps/web/lib/risk.ts`](apps/web/lib/risk.ts)) with a one-line explanation.
+
+---
+
+## The GenAI service
+
+Optional Azure OpenAI (`AZURE_OPENAI_ENDPOINT` / `_KEY` / `_DEPLOYMENT`); **unset ⇒ a
+deterministic offline mode** so the whole stack is demoable with no credentials.
+
+- **`/summarize`** — with an LLM: the model gets one `query_invoices` tool constrained to
+  four whitelisted tables and picks table + `where` + `order_by`; the service builds and
+  runs that query as `genai_readonly`, then the model summarises the rows. Offline: a
+  keyword router picks the query (`overdue`, `duplicate`, `risk/late/delay`, `vendor`, …)
+  and a template writes the summary. A query is **never** built from free text directly —
+  only from a structured spec, validated against the whitelist
+  ([`app/query_builder.py`](services/genai-service/app/query_builder.py),
+  [`app/whitelist.py`](services/genai-service/app/whitelist.py)).
+- **`/explain-duplicate`** — passes the stored confidence + matched fields and asks for a
+  plain-language paragraph. Explains the existing flag only; does not assert a new match.
+- **`/extract-ocr`** — `pypdf` pulls the text layer; the LLM (tool call) or, offline, a
+  set of regexes map it to `{value, confidence}` per field. **No text layer (scanned
+  image) → `pending_review`** with an empty skeleton — real image OCR needs a vision
+  provider, plugged into the fallback branch in `app/main.py` (marked in the code).
+
+---
+
+## Frontend
+
+[`apps/web/`](apps/web/) — Next.js 14 App Router, TypeScript, Tailwind, Apollo Client,
+Recharts. GraphQL Codegen (`client-preset`) generates typed documents from
+`graphql/schema.graphql`.
+
+```bash
+npm run dev         # http://localhost:3000
+npm run codegen     # typed hooks (also runs on prebuild)
+npm run test        # vitest — pure logic in lib/ and server/
+npm run typecheck
+npm run lint
+```
+
+### Screens
+
+| Route | What |
+|---|---|
+| `/` | Dashboard — pending / overdue / exposure stats, click-to-filter vendor-exposure bar chart, pending + overdue tables; extra admin block |
+| `/invoices` | Full list — URL-synced filters (vendor, department, date range, approval, payment, source, search), sort + pagination, row selection, bulk **approve** (role-gated) and **export selected to CSV** |
+| `/invoices/[id]` | Detail — header + status badges, duplicate callout (confirm / clear), delay-risk panel with plain-language note, approval timeline, record-payment form |
+| `/vendors`, `/vendors/[id]` | Vendor list (invoices, outstanding, avg delay, on-time %) and per-vendor dashboard + history |
+| `/upload` | Manual-entry form and CSV upload with a validated preview (per-row errors inline) before commit |
+| Ask panel | Slide-over on every screen — plain-language Q&A over current data, with a linked invoice table |
+| `/login` | Session auth; the app redirects here when there's no session |
+
+### One schema, one backend
+
+`graphql/schema.graphql` is the single contract: `lib/apollo.ts` points every operation at
+`HttpLink → /api/graphql`, and the BFF's `server/resolvers.ts` does the camelCase ⇄
+snake_case / enum / computed-field translation so nothing downstream changes.
+
+### Where the logic lives
+
+Business rules are in `lib/`, not in pages:
+[`format.ts`](apps/web/lib/format.ts) (money/date), [`status.ts`](apps/web/lib/status.ts)
+(the one colour vocabulary — no hex literals in components; `dup` violet is deliberately
+off the traffic-light scale), [`risk.ts`](apps/web/lib/risk.ts) (`RISK_THRESHOLDS`),
+[`csv.ts`](apps/web/lib/csv.ts), and [`validateInvoice.ts`](apps/web/lib/validateInvoice.ts)
+(shared by manual entry, CSV preview, and the import resolver).
+
+---
+
+## Tests & CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and PR:
+
+- **web** — `npm ci` → `codegen` → `typecheck` → `lint` → `vitest`.
+- **services** — `pip install -e` the shared package and every service, then run each
+  `services/*/tests/test_*.py` check script.
+
+Locally:
 
 ```bash
 cd apps/web && npm test
 cd services/<name> && PYTHONPATH=. python tests/test_*.py
 ```
 
-## Status
+The service tests are plain `assert` scripts with a `run()` / `__main__` — no framework,
+no fixtures. They cover the parts that break silently: validation rules, the duplicate
+matcher, the feature funnel, the query-builder whitelist, the OCR field contract, the
+digest formatter, and JWT mint/verify/refresh.
 
-| Area | State |
-|---|---|
-| `hasura/` migrations + metadata + seeds | **done** |
-| `infra/docker-compose.yml` — full 8-service stack | **done** |
-| `packages/shared-types/` (+ `shared_types.jwt`) | **done** |
-| `services/auth-service` (`/login` + `/refresh`) | **done** |
-| `services/ingestion-service` | **done** |
-| `services/ml-service` (+ synthetic-data / train / predict) | **done** |
-| `services/genai-service` (Azure OpenAI + offline fallback; `/extract-ocr` reads PDF text) | **done** |
-| `services/notification-service` (`log` / `slack` / `email` channels) | **done** |
-| frontend ↔ real backend (`/api/graphql` BFF, role-scoped reads, `REQUIRE_AUTH`) | **done** — `NEXT_PUBLIC_BACKEND=hasura` |
-| CI (`apps/web` + service checks) | **done** |
+---
+
+## Configuration reference
+
+### `infra/.env` (compose — loaded into every service)
+
+| Var | Default | For |
+|---|---|---|
+| `POSTGRES_USER` / `_PASSWORD` / `_DB` | `postgres` / `postgrespassword` / `invoice_tracker` | Postgres |
+| `PG_DATABASE_URL` / `HASURA_GRAPHQL_DATABASE_URL` | `postgres://…@postgres:5432/invoice_tracker` | Hasura + seed |
+| `HASURA_GRAPHQL_ADMIN_SECRET` / `HASURA_ADMIN_SECRET` | `devsecret` | admin access |
+| `HASURA_ENDPOINT` | `http://localhost:8088/v1/graphql` (compose overrides host → service name) | services → Hasura |
+| `HASURA_GRAPHQL_JWT_SECRET` | `{"type":"HS256","key":"dev-…-min"}` | JWT sign/verify (Hasura + auth-service + genai + BFF) |
+| `ML_SERVICE_URL` / `ML_SERVICE_SCORE_URL` / `NOTIFICATION_SERVICE_URL` / `GENAI_SERVICE_URL` | compose service URLs | referenced by Hasura metadata |
+| `AZURE_OPENAI_ENDPOINT` / `_KEY` / `_DEPLOYMENT` / `_API_VERSION` | unset → offline / `2024-06-01` | genai-service LLM |
+| `NOTIFY_CHANNEL` | `log` | `log` / `slack` / `email` |
+| `SLACK_WEBHOOK_URL` | — | `NOTIFY_CHANNEL=slack` |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_STARTTLS` / `SMTP_USER` / `SMTP_PASSWORD` / `EMAIL_FROM` / `EMAIL_TO` | — / `587` / `1` / … | `NOTIFY_CHANNEL=email` (`EMAIL_TO` comma-separated) |
+| `AUTH_TOKEN_TTL_SECONDS` | `3600` | auth-service token lifetime |
+| `AUTH_USERS` | built-in dev list | JSON override of the mock user directory |
+
+### `apps/web/.env.local`
+
+| Var | Default | Notes |
+|---|---|---|
+| `NEXT_PUBLIC_AUTH_URL` | `http://localhost:8095` | browser → auth-service (login/refresh) |
+| `HASURA_ENDPOINT` | `http://localhost:8088/v1/graphql` | **server-only** (BFF) |
+| `HASURA_ADMIN_SECRET` | `devsecret` | server-only |
+| `GENAI_SERVICE_URL` | `http://localhost:8093` | server-only |
+| `HASURA_GRAPHQL_JWT_SECRET` | *(match Hasura + auth-service)* | BFF verifies session JWTs / mints role-scoped read tokens |
+| `REQUIRE_AUTH` | *(unset)* | `1` to reject missing/invalid session tokens outright |
+
+---
+
+## Not for production
+
+This is a take-home / demo build. Deliberate shortcuts, each with a known ceiling:
+
+- **`auth-service` is mock** — plaintext dev users, no real IdP, no password policy, no
+  lockout. Only `/login` and the JWT shape are meant to survive a real replacement.
+- **Service → Hasura calls use the admin secret** (with an `x-hasura-role` override) —
+  fine for trusted in-cluster services, not for anything internet-facing.
+- **CORS is wildcard** on `auth-service` (no cookies are used).
+- **`/extract-ocr` handles PDF text layers only** — scanned/image documents return
+  `pending_review`; wiring a vision provider is left as a marked extension point.
+- **Ports are shifted** off the brief's defaults to avoid clashes on the dev machine
+  (`5433`, `8088`, `8091–8095`); container-internal ports match the brief.
+- **`npm audit`** flags dev/build-time transitive deps and Next against advisory ranges
+  that the pinned `next@14.2.x` security backports already cover; `--force` would pull a
+  breaking major and isn't warranted.

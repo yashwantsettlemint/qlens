@@ -16,6 +16,7 @@
   "dependencies": {
     "@apollo/client": "^3.14.1",
     "@graphql-tools/schema": "^10.1.0",
+    "@react-pdf/renderer": "^4.9.0",
     "graphql": "^16.14.2",
     "next": "^14.2.35",
     "papaparse": "^5.7.0",

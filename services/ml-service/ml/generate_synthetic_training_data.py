@@ -24,6 +24,7 @@ COLUMNS = [
     "invoice_day_of_month",
     "tax_amount",
     "po_matched",
+    "is_receivable",
     "paid_late",
     "delay_days",
 ]
@@ -43,6 +44,10 @@ def generate(n: int, seed: int = 20260907) -> list[dict]:
     dom = rng.integers(1, 29, n)
     tax = np.round(amount * rng.normal(0.18, 0.015, n).clip(0.05, 0.28), 2)
     po = rng.random(n) < 0.68
+    # ~40% receivables (customers owing us) vs payables (us owing vendors).
+    # Customers skew a bit slower to pay than we are to pay our own vendors —
+    # the only reason this needs to be a feature at all.
+    is_receivable = rng.random(n) < 0.4
 
     # latent late-propensity
     z = (
@@ -51,6 +56,7 @@ def generate(n: int, seed: int = 20260907) -> list[dict]:
         + 0.9 * (dom >= 25)
         + 0.7 * (~po)
         + 0.35 * (np.log1p(amount) - 11.6)
+        + 0.5 * is_receivable
         + rng.normal(0, 0.5, n)
     )
     p_late = _sigmoid(z)
@@ -68,6 +74,7 @@ def generate(n: int, seed: int = 20260907) -> list[dict]:
             "invoice_day_of_month": int(dom[i]),
             "tax_amount": float(tax[i]),
             "po_matched": int(bool(po[i])),
+            "is_receivable": int(bool(is_receivable[i])),
             "paid_late": int(bool(paid_late[i])),
             "delay_days": int(delay_days[i]),
         }

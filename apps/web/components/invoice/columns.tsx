@@ -4,12 +4,22 @@ import type { InvoiceRow } from "@/lib/types";
 import { fmtDate } from "@/lib/format";
 import { Money } from "@/components/ui/Money";
 import {
+  Badge,
   ApprovalBadge,
   PaymentBadge,
   OverdueBadge,
   DuplicateBadge,
 } from "@/components/ui/Badge";
+import type { Tone } from "@/lib/status";
 import { RiskDot } from "@/components/ui/RiskDot";
+
+/** draft = neutral, sent = warn (chasing), disputed = bad, settled = ok. */
+export const COLLECTION_TONE: Record<string, Tone> = {
+  DRAFT: "neutral",
+  SENT: "warn",
+  DISPUTED: "bad",
+  SETTLED: "ok",
+};
 
 /**
  * Reusable invoice-table columns. Pages pick the set they need by key; the
@@ -27,16 +37,51 @@ export const INVOICE_COLUMNS: Record<string, Column<InvoiceRow>> = {
     key: "vendor",
     header: "Vendor",
     sortable: true,
-    sortValue: (r) => r.vendor.name,
-    cell: (r) => (
-      <Link
-        href={`/vendors/${r.vendor.id}`}
-        className="hover:text-accent hover:underline"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {r.vendor.name}
-      </Link>
-    ),
+    sortValue: (r) => r.vendor?.name ?? "",
+    cell: (r) =>
+      r.vendor ? (
+        <Link
+          href={`/vendors/${r.vendor.id}`}
+          className="hover:text-accent hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {r.vendor.name}
+        </Link>
+      ) : (
+        <span className="text-ink-muted">—</span>
+      ),
+  },
+  customer: {
+    key: "customer",
+    header: "Customer",
+    sortable: true,
+    sortValue: (r) => r.customer?.name ?? "",
+    cell: (r) =>
+      r.customer ? (
+        <Link
+          href={`/customers/${r.customer.id}`}
+          className="hover:text-accent hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {r.customer.name}
+        </Link>
+      ) : (
+        <span className="text-ink-muted">—</span>
+      ),
+  },
+  collection: {
+    key: "collectionStatus",
+    header: "Collection",
+    sortable: true,
+    sortValue: (r) => r.collectionStatus ?? "",
+    cell: (r) =>
+      r.collectionStatus ? (
+        <Badge tone={COLLECTION_TONE[r.collectionStatus] ?? "neutral"}>
+          {r.collectionStatus.toLowerCase()}
+        </Badge>
+      ) : (
+        <span className="text-ink-muted">—</span>
+      ),
   },
   department: {
     key: "department",
@@ -87,7 +132,7 @@ export const INVOICE_COLUMNS: Record<string, Column<InvoiceRow>> = {
     header: "Delay risk",
     sortable: true,
     sortValue: (r) => r.delayPrediction?.delayProbability ?? -1,
-    cell: (r) => <RiskDot probability={r.delayPrediction?.delayProbability} withLabel />,
+    cell: (r) => <RiskDot pred={r.delayPrediction} withLabel />,
   },
   approval: {
     key: "approvalStatus",

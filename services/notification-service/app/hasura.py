@@ -39,8 +39,8 @@ async def _gql(query: str, variables: dict) -> dict:
 _FIND = """
 query PastDue($today: date!) {
   invoices(where: {payment_status: {_eq: "unpaid"}, due_date: {_lt: $today}}) {
-    id invoice_number due_date amount department
-    vendor { name }
+    id invoice_number due_date amount department direction
+    vendor { name email }
   }
 }
 """

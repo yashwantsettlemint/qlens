@@ -11,3 +11,21 @@
         retries: 1
       use_prepared_statements: true
   tables: "!include default/tables/tables.yaml"
+  functions: "!include default/functions/functions.yaml"
+# Its own database: OCR review drafts are owned end-to-end by ocr-service and
+# never joined against `invoices` in a GraphQL query (reviewQueue resolver
+# reads the jsonb draft flat, see apps/web/server/resolvers.ts), so splitting
+# it out of the shared `default` database costs nothing in query complexity.
+- name: ocr
+  kind: postgres
+  configuration:
+    connection_info:
+      database_url:
+        from_env: PG_OCR_DATABASE_URL
+      isolation_level: read-committed
+      pool_settings:
+        idle_timeout: 180
+        max_connections: 20
+        retries: 1
+      use_prepared_statements: true
+  tables: "!include ocr/tables/tables.yaml"

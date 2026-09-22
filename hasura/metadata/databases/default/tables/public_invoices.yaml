@@ -5,6 +5,9 @@ object_relationships:
   - name: vendor
     using:
       foreign_key_constraint_on: vendor_id
+  - name: customer
+    using:
+      foreign_key_constraint_on: customer_id
   - name: purchaseOrder
     using:
       foreign_key_constraint_on: po_id
@@ -50,9 +53,15 @@ insert_permissions:
   - role: finance_user
     permission:
       check: {}
+      set:
+        company_id: X-Hasura-Company-Id
       columns:
         - invoice_number
+        - description
+        - extracted_text
+        - direction
         - vendor_id
+        - customer_id
         - po_id
         - invoice_date
         - due_date
@@ -60,6 +69,7 @@ insert_permissions:
         - tax_amount
         - department
         - approval_status
+        - collection_status
         - payment_status
         - source
         - created_by
@@ -67,21 +77,30 @@ select_permissions:
   - role: finance_user
     permission:
       columns: "*"
-      filter: {}
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      allow_aggregations: true
   - role: approver
     permission:
       columns: "*"
-      filter: {}
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      allow_aggregations: true
+  - role: company_admin
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      allow_aggregations: true
   - role: genai_readonly
     permission:
       columns: "*"
-      filter: {}
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
 update_permissions:
   - role: finance_user
     permission:
       columns:
         - invoice_number
+        - description
         - vendor_id
+        - customer_id
         - po_id
         - invoice_date
         - due_date
@@ -89,10 +108,11 @@ update_permissions:
         - tax_amount
         - department
         - approval_status
+        - collection_status
         - payment_status
         - source
         - created_by
-      filter: {}
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
       check: {}
 event_triggers:
   - name: invoice_ml_score
@@ -102,14 +122,47 @@ event_triggers:
         columns: "*"
       update:
         columns:
+          # delay-model features
           - amount
+          - tax_amount
           - vendor_id
+          - customer_id
+          - direction
           - department
+          - invoice_date
+          - po_id
+          # a payment-status change shifts the party's on-time rate -> ml-service
+          # re-scores that party's other open invoices
+          - payment_status
     retry_conf:
       num_retries: 3
       interval_sec: 15
       timeout_sec: 60
     webhook_from_env: ML_SERVICE_SCORE_URL
+    headers:
+      - name: x-service-source
+        value: hasura-event-trigger
+  - name: invoice_embed
+    definition:
+      enable_manual: true
+      insert:
+        columns: "*"
+      update:
+        columns:
+          - invoice_number
+          - vendor_id
+          - amount
+          - tax_amount
+          - department
+          - invoice_date
+          - due_date
+          - approval_status
+          - payment_status
+    retry_conf:
+      num_retries: 3
+      interval_sec: 30
+      timeout_sec: 60
+    webhook: "{{GENAI_SERVICE_URL}}/embed"
     headers:
       - name: x-service-source
         value: hasura-event-trigger

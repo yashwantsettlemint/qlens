@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import date
 
 from . import whitelist as wl
 
@@ -39,9 +40,12 @@ def build(spec: QuerySpec) -> tuple[str, dict]:
     selection = list(fields)
     for rel in spec.include:
         rel_fields = wl.RELATIONS.get(spec.table, {}).get(rel)
-        if not rel_fields:
-            raise wl.NotAllowed(f"relationship '{rel}' not allowed on {spec.table}")
-        selection.append(f"{rel} {{ {' '.join(rel_fields)} }}")
+        # Unlike `where`/`fields` (strict — a bad filter should fail loud), an
+        # unrecognised relationship is just dropped: some models occasionally
+        # put a plain column name here instead of a real relationship, and
+        # skipping it is harmless — the column is likely in `fields` already.
+        if rel_fields:
+            selection.append(f"{rel} {{ {' '.join(rel_fields)} }}")
 
     args = ["where: $where", f"limit: {limit}"]
     if spec.order_by:
@@ -60,8 +64,43 @@ def build(spec: QuerySpec) -> tuple[str, dict]:
 
 # ---- offline keyword router: question -> spec (no LLM) -----------------------
 
-def route_offline(question: str) -> tuple[QuerySpec, str]:
+_STATUS_KEYWORDS = (
+    # order matters: "unpaid" contains "paid", so check it first
+    ("unpaid", "payment_status", "unpaid"),
+    ("not paid", "payment_status", "unpaid"),
+    ("paid", "payment_status", "paid"),
+    ("awaiting approval", "approval_status", "pending"),
+    ("pending", "approval_status", "pending"),
+    ("approved", "approval_status", "approved"),
+    ("rejected", "approval_status", "rejected"),
+)
+
+
+def route_offline(
+    question: str, vendors: list[dict] | None = None
+) -> tuple[QuerySpec, str]:
+    """`vendors` (optional): [{"id", "name"}] so "invoices from <vendor>" can
+    filter by vendor_id without an LLM."""
     q = question.lower()
+    words = set(q.replace(",", " ").split())
+
+    # "invoices from <vendor>" — match the full name or a distinctive first word
+    for v in sorted(vendors or [], key=lambda x: -len(x.get("name", ""))):
+        name = v.get("name", "")
+        nl = name.lower()
+        first = nl.split()[0] if nl else ""
+        if nl and (nl in q or (len(first) >= 4 and first in words)):
+            return (
+                QuerySpec(
+                    table="invoices",
+                    where={"vendor_id": {"_eq": v["id"]}},
+                    order_by={"invoice_date": "desc"},
+                    include=["vendor"],
+                    limit=100,
+                ),
+                f"invoices for {name}",
+            )
+
     if "duplicate" in q:
         return (
             QuerySpec(
@@ -72,16 +111,34 @@ def route_offline(question: str) -> tuple[QuerySpec, str]:
             "duplicate flags, highest confidence first",
         )
     if "overdue" in q:
+        # "overdue" is never a stored payment_status value (only paid/unpaid) —
+        # it's derived, same as the frontend's effectivePaymentStatus(): unpaid
+        # and past due.
         return (
             QuerySpec(
                 table="invoices",
-                where={"payment_status": {"_eq": "overdue"}},
+                where={
+                    "payment_status": {"_neq": "paid"},
+                    "due_date": {"_lt": date.today().isoformat()},
+                },
                 order_by={"due_date": "asc"},
                 include=["vendor"],
                 limit=50,
             ),
             "overdue invoices, oldest due date first",
         )
+    for kw, col, val in _STATUS_KEYWORDS:
+        if kw in q:
+            return (
+                QuerySpec(
+                    table="invoices",
+                    where={col: {"_eq": val}},
+                    order_by={"invoice_date": "desc"},
+                    include=["vendor"],
+                    limit=100,
+                ),
+                f"{val} invoices",
+            )
     if any(k in q for k in ("high-risk", "high risk", "late", "delay", "risk")):
         return (
             QuerySpec(

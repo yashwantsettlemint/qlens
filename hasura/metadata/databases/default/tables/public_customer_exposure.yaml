@@ -1,0 +1,25 @@
+table:
+  name: customer_exposure
+  schema: public
+object_relationships:
+  - name: customer
+    using:
+      manual_configuration:
+        remote_table:
+          name: customers
+          schema: public
+        column_mapping:
+          customer_id: id
+select_permissions:
+  - role: finance_user
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: approver
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: company_admin
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }

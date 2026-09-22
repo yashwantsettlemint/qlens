@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery, useMutation } from "@apollo/client";
 import { InvoiceDetailQuery } from "@/graphql/operations/queries";
-import { SetApprovalMutation } from "@/graphql/operations/mutations";
+import { SetApprovalMutation, DeleteInvoiceMutation } from "@/graphql/operations/mutations";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Panel } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
+import { Callout } from "@/components/ui/Callout";
 import { QueryState } from "@/components/ui/QueryState";
 import {
   ApprovalBadge,
@@ -15,7 +17,7 @@ import {
   DuplicateBadge,
 } from "@/components/ui/Badge";
 import { DuplicateCallout } from "@/components/invoice/DuplicateCallout";
-import { DelayPanel } from "@/components/invoice/DelayPanel";
+import { InvoiceSummaryPanel } from "@/components/invoice/InvoiceSummaryPanel";
 import { ApprovalTimeline } from "@/components/invoice/ApprovalTimeline";
 import { PaymentPanel } from "@/components/invoice/PaymentPanel";
 import { inr, fmtDate } from "@/lib/format";
@@ -23,12 +25,18 @@ import { useRole } from "@/lib/role";
 
 export default function InvoiceDetailPage({ params }: { params: { id: string } }) {
   const { can } = useRole();
+  const router = useRouter();
   const { data, loading, error } = useQuery(InvoiceDetailQuery, {
     variables: { id: params.id },
   });
   const [setApproval, approvalState] = useMutation(SetApprovalMutation, {
     refetchQueries: ["InvoiceDetail", "DashboardStats", "Invoices"],
     awaitRefetchQueries: true,
+    onError: () => {}, // shown below via approvalState.error, not thrown
+  });
+  const [deleteInvoice, deleteState] = useMutation(DeleteInvoiceMutation, {
+    refetchQueries: ["DashboardStats", "Invoices"],
+    onError: () => {}, // shown below via deleteState.error, not thrown
   });
 
   const inv = data?.invoice;
@@ -43,42 +51,75 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
             title={<span className="tabular">{inv.invoiceNumber}</span>}
             meta={
               <span>
-                <Link href={`/vendors/${inv.vendor.id}`} className="text-accent hover:underline">
-                  {inv.vendor.name}
+                <Link href={`/vendors/${inv.vendor?.id}`} className="text-accent hover:underline">
+                  {inv.vendor?.name}
                 </Link>{" "}
                 · {inv.department}
               </span>
             }
             actions={
-              inv.approvalStatus === "PENDING" && can("approve") ? (
-                <>
-                  <Button
-                    variant="primary"
-                    data-testid="approve-invoice"
-                    disabled={approvalState.loading}
-                    onClick={() =>
-                      setApproval({ variables: { id: inv.id, status: "APPROVED" } })
-                    }
-                  >
-                    Approve
-                  </Button>
+              <>
+                {inv.approvalStatus === "PENDING" && can("approve") && (
+                  <>
+                    <Button
+                      variant="primary"
+                      data-testid="approve-invoice"
+                      disabled={approvalState.loading}
+                      onClick={() =>
+                        setApproval({ variables: { id: inv.id, status: "APPROVED" } })
+                      }
+                    >
+                      Approve
+                    </Button>
+                    <Button
+                      variant="danger"
+                      data-testid="reject-invoice"
+                      disabled={approvalState.loading}
+                      onClick={() => {
+                        const note = window.prompt("Reason for rejection?") ?? undefined;
+                        setApproval({
+                          variables: { id: inv.id, status: "REJECTED", note },
+                        });
+                      }}
+                    >
+                      Reject
+                    </Button>
+                  </>
+                )}
+                {can("deleteInvoice") && (
                   <Button
                     variant="danger"
-                    data-testid="reject-invoice"
-                    disabled={approvalState.loading}
-                    onClick={() => {
-                      const note = window.prompt("Reason for rejection?") ?? undefined;
-                      setApproval({
-                        variables: { id: inv.id, status: "REJECTED", note },
-                      });
+                    data-testid="delete-invoice"
+                    disabled={deleteState.loading}
+                    onClick={async () => {
+                      if (
+                        !window.confirm(
+                          `Delete invoice ${inv.invoiceNumber}? This can't be undone.`,
+                        )
+                      )
+                        return;
+                      const res = await deleteInvoice({ variables: { id: inv.id } });
+                      if (res.data?.deleteInvoice) router.push("/invoices");
                     }}
                   >
-                    Reject
+                    Delete
                   </Button>
-                </>
-              ) : undefined
+                )}
+              </>
             }
           />
+
+          {deleteState.error && (
+            <Callout tone="bad" className="mb-4">
+              {deleteState.error.message}
+            </Callout>
+          )}
+
+          {approvalState.error && (
+            <Callout tone="bad" className="mb-4">
+              {approvalState.error.message}
+            </Callout>
+          )}
 
           <div className="mb-4 flex flex-wrap gap-2">
             <ApprovalBadge status={inv.approvalStatus} />
@@ -89,6 +130,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
 
           <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
             <div className="space-y-4">
+              <InvoiceSummaryPanel invoiceId={inv.id} description={inv.description} />
               <Panel title="Details">
                 <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
                   <Detail label="Amount" value={inr(inv.amount)} mono />
@@ -99,7 +141,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
                   <Detail
                     label="Payment terms"
                     value={
-                      inv.vendor.paymentTermsDays ? `${inv.vendor.paymentTermsDays} days` : "—"
+                      inv.vendor?.paymentTermsDays ? `${inv.vendor.paymentTermsDays} days` : "—"
                     }
                   />
                   <Detail
@@ -111,7 +153,7 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
                     }
                   />
                   <Detail label="Source" value={inv.source} />
-                  <Detail label="Vendor GSTIN" value={inv.vendor.taxId ?? "—"} mono />
+                  <Detail label="Vendor GSTIN" value={inv.vendor?.taxId ?? "—"} mono />
                 </dl>
               </Panel>
 
@@ -122,12 +164,12 @@ export default function InvoiceDetailPage({ params }: { params: { id: string } }
               {inv.duplicateFlag && (
                 <DuplicateCallout invoiceId={inv.id} flag={inv.duplicateFlag} />
               )}
-              {inv.delayPrediction && (
-                <DelayPanel pred={inv.delayPrediction} vendorName={inv.vendor.name} />
-              )}
+              {/* Delay risk is a receivables concern (will the customer pay late?) —
+                  for a payable, the due date already on this page is what matters. */}
               <PaymentPanel
                 invoiceId={inv.id}
                 total={inv.amount + inv.taxAmount}
+                approvalStatus={inv.approvalStatus}
                 paymentStatus={inv.paymentStatus}
                 payments={inv.payments}
                 canRecord={can("recordPayment")}

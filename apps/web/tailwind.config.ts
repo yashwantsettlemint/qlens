@@ -17,6 +17,7 @@ const config: Config = {
         line: "var(--line)",
         accent: "var(--accent)",
         "accent-ink": "var(--accent-ink)",
+        "accent-soft": "var(--accent-soft)",
         genai: "var(--genai)",
         "genai-tint": "var(--genai-tint)",
         // status vocabulary
@@ -28,10 +29,16 @@ const config: Config = {
         "bad-bg": "var(--bad-bg)",
         "dup-fg": "var(--dup-fg)",
         "dup-bg": "var(--dup-bg)",
+        "panel-navy": "var(--panel-navy)",
+        "panel-navy-line": "var(--panel-navy-line)",
+        "panel-navy-ink": "var(--panel-navy-ink)",
       },
       fontFamily: {
         sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "monospace"],
+        // Public-facing pages only (landing, login, register) — see app/layout.tsx.
+        display: ["var(--font-display)", "ui-sans-serif", "system-ui", "sans-serif"],
+        plex: ["var(--font-plex-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
       },
       fontSize: {
         // tight enterprise scale
@@ -44,8 +51,17 @@ const config: Config = {
         "2xl": ["24px", "30px"],
       },
       borderRadius: {
-        DEFAULT: "4px",
-        sm: "3px",
+        DEFAULT: "8px",
+        sm: "6px",
+        md: "8px",
+        lg: "10px",
+        xl: "14px",
+        "2xl": "18px",
+        full: "9999px",
+      },
+      boxShadow: {
+        card: "0 1px 2px rgb(16 38 29 / 0.05), 0 8px 22px -12px rgb(16 90 60 / 0.16)",
+        pop: "0 14px 36px -14px rgb(16 90 60 / 0.26)",
       },
       maxWidth: {
         content: "1440px",

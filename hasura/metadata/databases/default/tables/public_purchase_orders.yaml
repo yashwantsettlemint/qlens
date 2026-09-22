@@ -17,8 +17,12 @@ select_permissions:
   - role: finance_user
     permission:
       columns: "*"
-      filter: {}
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
   - role: approver
     permission:
       columns: "*"
-      filter: {}
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: company_admin
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }

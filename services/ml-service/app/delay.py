@@ -1,55 +1,67 @@
-"""Delay prediction. Uses models/delay_model.pkl when present (see ml/train.py);
-otherwise a transparent heuristic so /score works before a model is trained.
-"""
-
 from __future__ import annotations
-
 import pickle
 from datetime import date
 from functools import lru_cache
-
-from .config import MODEL_PATH
+from . import ModelUnavailable
+from .config import MODEL_PATH, company_model_path
+from .explain import feature_contributions
 from .features import assemble_features, vendor_ontime_rate
 
-HEURISTIC_VERSION = "heuristic-v0"
+
+@lru_cache(maxsize=64)  # bounded: many companies' models shouldn't live in memory forever
+def _load_model(company_id: str):
+    path = company_model_path(company_id, MODEL_PATH)
+    source = "trained"
+    if not path.exists():
+        path, source = MODEL_PATH, "bootstrap"  # shared synthetic model — no real customer data
+    if not path.exists():
+        raise ModelUnavailable(
+            f"delay model not found at {path} - run `python -m ml.train`"
+        )
+    with open(path, "rb") as fh:
+        model = pickle.load(fh)  # {"clf","reg","feature_names","version",...}
+    model["source"] = source
+    return model
 
 
-@lru_cache(maxsize=1)
-def _load_model():
-    if not MODEL_PATH.exists():
-        return None
-    with open(MODEL_PATH, "rb") as fh:
-        return pickle.load(fh)  # {"clf","reg","feature_names","version",...}
-
-
-def predict_from_features(feats: dict[str, float]) -> dict:
-    model = _load_model()
-    if model is None:
-        rate = feats["vendor_ontime_rate"]
-        prob = 0.12 + 0.55 * (1 - rate) + 0.12 * (1 - feats["po_matched"])
-        prob += 0.08 if feats["day_of_month"] >= 25 else 0.0
-        prob = round(max(0.02, min(0.95, prob)), 4)
-        return {
-            "delay_probability": prob,
-            "predicted_delay_days": int(round(prob * 25)),
-            "model_version": HEURISTIC_VERSION,
-        }
+def predict_from_features(feats: dict[str, float], company_id: str) -> dict:
+    model = _load_model(company_id)
 
     import numpy as np
 
     x = np.array([[feats.get(n, 0.0) for n in model["feature_names"]]], dtype=float)
     prob = float(model["clf"].predict_proba(x)[0, 1])
     days = int(max(0, round(float(model["reg"].predict(x)[0]))))
+    explanation = feature_contributions(model["clf"], x, model["feature_names"])
     return {
         "delay_probability": round(prob, 4),
         "predicted_delay_days": days,
         "model_version": model["version"],
+        "explanation": explanation,
     }
 
 
-def predict_delay(invoice: dict, vendor_paid_history: list[dict]) -> dict:
+def model_info(company_id: str) -> dict:
+    """Technical details of the trained delay model, for an admin status view."""
+    try:
+        model = _load_model(company_id)
+    except ModelUnavailable:
+        return {"status": "not_trained", "method": "heuristic", "model_version": "heuristic-v0"}
+    return {
+        "status": "trained",
+        "source": model.get("source", "trained"),
+        "method": "ml",
+        "model_version": model.get("version"),
+        "trained_at": model.get("trained_at"),
+        "n_rows": model.get("n_rows"),
+        "feature_count": len(model.get("feature_names", [])),
+        "metrics": model.get("metrics", {}),
+    }
+
+
+def predict_delay(invoice: dict, vendor_paid_history: list[dict], company_id: str) -> dict:
     """`invoice` keys: amount, tax_amount, department, invoice_date, po_id,
-    approval_chain_length (optional)."""
+    direction, approval_chain_length (optional)."""
     inv_date = date.fromisoformat(str(invoice["invoice_date"])[:10])
     feats = assemble_features(
         vendor_ontime_rate=vendor_ontime_rate(vendor_paid_history),
@@ -59,5 +71,6 @@ def predict_delay(invoice: dict, vendor_paid_history: list[dict]) -> dict:
         invoice_day_of_month=inv_date.day,
         tax_amount=float(invoice.get("tax_amount") or 0),
         po_matched=bool(invoice.get("po_id")),
+        is_receivable=str(invoice.get("direction") or "payable") == "receivable",
     )
-    return predict_from_features(feats)
+    return predict_from_features(feats, company_id)

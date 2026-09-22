@@ -44,3 +44,5 @@ export async function hasura<T = any>(
 }
 
 export const GENAI_URL = process.env.GENAI_SERVICE_URL ?? "http://localhost:8093";
+export const ML_SERVICE_URL = process.env.ML_SERVICE_URL ?? "http://localhost:8092";
+export const NOTIFICATION_URL = process.env.NOTIFICATION_SERVICE_URL ?? "http://localhost:8094";

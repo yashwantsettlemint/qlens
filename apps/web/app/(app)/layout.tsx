@@ -8,7 +8,9 @@ import { AppShell } from "@/components/layout/AppShell";
 /** Pages that need a capability beyond "signed in". Everything else is open to any role. */
 const GATED: { prefix: string; cap: Capability }[] = [
   { prefix: "/upload", cap: "addInvoices" },
-  { prefix: "/", cap: "viewDashboard" }, // exact match only, checked below
+  { prefix: "/users", cap: "manageUsers" },
+  { prefix: "/forecast", cap: "viewDashboard" },
+  { prefix: "/dashboard", cap: "viewDashboard" },
 ];
 
 /** Everything under here needs a session; unauthenticated -> /login. A role that
@@ -20,10 +22,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const blocked =
     ready && session
-      ? GATED.some(
-          ({ prefix, cap }) =>
-            (prefix === "/" ? pathname === "/" : pathname.startsWith(prefix)) && !can(cap),
-        )
+      ? GATED.some(({ prefix, cap }) => pathname.startsWith(prefix) && !can(cap))
       : false;
 
   useEffect(() => {

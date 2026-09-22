@@ -28,6 +28,7 @@ export function downloadCsv(filename: string, text: string) {
 
 export const CSV_TEMPLATE_HEADERS = [
   "invoiceNumber",
+  "description",
   "vendor",
   "department",
   "invoiceDate",
@@ -36,6 +37,31 @@ export const CSV_TEMPLATE_HEADERS = [
   "taxAmount",
   "source",
 ] as const;
+
+/** Columns a row can't be built without. `taxAmount`/`source` default. */
+const REQUIRED_HEADERS = [
+  "invoiceNumber",
+  "vendor",
+  "department",
+  "invoiceDate",
+  "dueDate",
+  "amount",
+] as const;
+
+/** Thousands of papaparse errors -> a bounded summary grouped by message. */
+function groupParseErrors(errors: Papa.ParseError[]): string[] {
+  if (errors.length === 0) return [];
+  const counts = new Map<string, number>();
+  for (const e of errors) counts.set(e.message, (counts.get(e.message) ?? 0) + 1);
+  const ranked = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  const out: string[] = [];
+  if (errors.length > 5) {
+    out.push(`${errors.length} parse errors across ${ranked.length} kind(s):`);
+  }
+  for (const [msg, n] of ranked.slice(0, 6)) out.push(n > 1 ? `• ${msg} — ${n} rows` : `• ${msg}`);
+  if (ranked.length > 6) out.push(`• …and ${ranked.length - 6} other kind(s)`);
+  return out;
+}
 
 export interface ParsedInvoiceRow {
   line: number;
@@ -61,12 +87,33 @@ export function parseInvoiceCsv(
       header: true,
       skipEmptyLines: "greedy",
       transformHeader: (h) => h.trim(),
+      delimitersToGuess: [",", ";", "\t", "|"],
       complete: (result) => {
+        // Wrong-format file: bail with one clear message, not a row per line.
+        const fields = (result.meta.fields ?? []).map((f) => f.trim());
+        const missing = REQUIRED_HEADERS.filter((h) => !fields.includes(h));
+        if (missing.length > 0) {
+          resolve({
+            rows: [],
+            parseErrors: [
+              `This file doesn't match the expected format — missing column${
+                missing.length === 1 ? "" : "s"
+              }: ${missing.join(", ")}.`,
+              `Header row read as: ${
+                fields.length ? fields.join(", ") : "none — is the first row the column names?"
+              }`,
+              `Expected: ${CSV_TEMPLATE_HEADERS.join(", ")}. Use “Download template” above.`,
+            ],
+          });
+          return;
+        }
+
         const rows: ParsedInvoiceRow[] = result.data.map((raw, i) => {
           const vendorName = (raw.vendor ?? "").trim();
           const vendorId = byName.get(vendorName.toLowerCase()) ?? "";
           const input: InvoiceInputShape = {
             invoiceNumber: (raw.invoiceNumber ?? "").trim(),
+            description: (raw.description ?? "").trim() || null,
             vendorId,
             invoiceDate: (raw.invoiceDate ?? "").trim(),
             dueDate: (raw.dueDate ?? "").trim(),
@@ -79,10 +126,7 @@ export function parseInvoiceCsv(
           if (!error && !vendorId) error = `Vendor "${vendorName}" not recognised`;
           return { line: i + 2, raw, input: error ? null : input, error };
         });
-        resolve({
-          rows,
-          parseErrors: result.errors.map((e) => `Line ${e.row ?? "?"}: ${e.message}`),
-        });
+        resolve({ rows, parseErrors: groupParseErrors(result.errors) });
       },
     });
   });

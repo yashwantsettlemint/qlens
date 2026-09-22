@@ -1,13 +1,15 @@
 import { graphql } from "graphql";
 import { makeExecutableSchema } from "@graphql-tools/schema";
+import { cookies } from "next/headers";
 import typeDefs from "@/graphql/schema.graphql";
 import { resolvers } from "@/server/resolvers";
-import { requestContext } from "@/server/auth";
+import { requestContext, SESSION_COOKIE } from "@/server/auth";
 import { verifyHS256, type Claims } from "@/server/jwt";
 
 /**
  * BFF: the browser's Apollo client posts the frontend's own operations here
- * (when NEXT_PUBLIC_BACKEND=hasura). The route verifies the caller's JWT,
+ * (when NEXT_PUBLIC_BACKEND=hasura). The route verifies the caller's session
+ * (an httpOnly cookie set by /api/login — never readable by page JS),
  * enforces role on mutations (server/auth.ts + server/resolvers.ts), and runs
  * the query against Hasura server-side — the admin secret never ships to the
  * client, and no component/operation changes.
@@ -25,12 +27,21 @@ const unauthenticated = (message: string) =>
   Response.json({ errors: [{ message, extensions: { code: "UNAUTHENTICATED" } }] });
 
 export async function POST(req: Request) {
-  const { query, variables, operationName } = await req.json();
+  let body: { query?: string; variables?: Record<string, unknown>; operationName?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ errors: [{ message: "Empty or invalid request body" }] }, { status: 400 });
+  }
+  const { query, variables, operationName } = body;
+  if (typeof query !== "string") {
+    return Response.json({ errors: [{ message: "Missing GraphQL query" }] }, { status: 400 });
+  }
 
   let claims: Claims | null = null;
-  const authz = req.headers.get("authorization");
-  if (authz && authz.toLowerCase().startsWith("bearer ")) {
-    claims = verifyHS256(authz.slice(7), JWT_SECRET);
+  const token = cookies().get(SESSION_COOKIE)?.value;
+  if (token) {
+    claims = verifyHS256(token, JWT_SECRET);
     if (!claims) {
       return unauthenticated("Your session has expired or is invalid — sign in again.");
     }
@@ -43,8 +54,8 @@ export async function POST(req: Request) {
     graphql({
       schema,
       source: query,
-      variableValues: variables ?? undefined,
-      operationName: operationName ?? undefined,
+      variableValues: variables,
+      operationName: operationName,
     }),
   );
   return Response.json(result);

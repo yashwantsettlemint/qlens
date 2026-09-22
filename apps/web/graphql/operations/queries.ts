@@ -18,6 +18,141 @@ export const DashboardStatsQuery = graphql(`
   }
 `);
 
+export const CompanySettingsQuery = graphql(`
+  query CompanySettings {
+    companySettings {
+      name
+      aliases
+      signatureDataUrl
+      logoDataUrl
+      gstin
+      pan
+      address
+      state
+      bankAccountName
+      bankName
+      bankAccountNumber
+      bankIfsc
+      bankSwift
+    }
+  }
+`);
+
+export const MlModelStatusQuery = graphql(`
+  query MlModelStatus {
+    mlModelStatus {
+      duplicate {
+        status
+        method
+        modelVersion
+        trainedAt
+        nRows
+        featureCount
+        threshold
+        metrics {
+          rocAuc
+          accuracy
+          precision
+          recall
+        }
+      }
+      delay {
+        status
+        method
+        modelVersion
+        trainedAt
+        nRows
+        featureCount
+        metrics {
+          rocAuc
+          accuracy
+          precision
+          recall
+          maeDays
+          r2
+        }
+      }
+    }
+  }
+`);
+
+export const MlDriftStatusQuery = graphql(`
+  query MlDriftStatus {
+    mlDriftStatus {
+      modelName
+      checkedAt
+      driftDetected
+      featurePsiJson
+      rollingMetricsJson
+      baselineMetricsJson
+      notes
+    }
+  }
+`);
+
+export const MlRetrainHistoryQuery = graphql(`
+  query MlRetrainHistory($limit: Int) {
+    mlRetrainHistory(limit: $limit) {
+      id
+      modelName
+      triggeredBy
+      startedAt
+      finishedAt
+      status
+      oldVersion
+      newVersion
+      oldMetrics {
+        rocAuc
+        accuracy
+        precision
+        recall
+        maeDays
+        r2
+      }
+      newMetrics {
+        rocAuc
+        accuracy
+        precision
+        recall
+        maeDays
+        r2
+      }
+      error
+    }
+  }
+`);
+
+export const DemoRequestsQuery = graphql(`
+  query DemoRequests($limit: Int) {
+    demoRequests(limit: $limit) {
+      id
+      companyName
+      contactName
+      workEmail
+      companySize
+      message
+      createdAt
+    }
+  }
+`);
+
+export const ReviewQueueQuery = graphql(`
+  query ReviewQueue($status: String) {
+    reviewQueue(status: $status) {
+      id
+      status
+      issues
+      createdAt
+      filename
+      direction
+      counterpartyName
+      extractedFieldsJson
+      sourceMapJson
+      fullText
+    }
+  }
+`);
+
 export const VendorExposureQuery = graphql(`
   query VendorExposure($vendorId: ID) {
     vendorExposure(vendorId: $vendorId) {
@@ -45,11 +180,21 @@ export const InvoiceDetailQuery = graphql(`
   query InvoiceDetail($id: ID!) {
     invoice(id: $id) {
       ...InvoiceRowFields
+      description
+      template
       vendor {
         id
         name
         taxId
         paymentTermsDays
+      }
+      customer {
+        id
+        name
+        taxId
+        email
+        paymentTermsDays
+        creditLimit
       }
       purchaseOrder {
         id
@@ -62,6 +207,14 @@ export const InvoiceDetailQuery = graphql(`
         matchedInvoiceId
         confidenceScore
         reviewedStatus
+        reason
+        explanation {
+          feature
+          label
+          value
+          contribution
+          direction
+        }
         matchedInvoice {
           id
           invoiceNumber
@@ -77,6 +230,13 @@ export const InvoiceDetailQuery = graphql(`
         delayProbability
         predictedDelayDays
         modelVersion
+        explanation {
+          feature
+          label
+          value
+          contribution
+          direction
+        }
       }
       approvalEvents {
         id
@@ -94,6 +254,12 @@ export const InvoiceDetailQuery = graphql(`
   }
 `);
 
+export const InvoiceSummaryQuery = graphql(`
+  query InvoiceSummary($id: ID!) {
+    invoiceSummary(id: $id)
+  }
+`);
+
 export const VendorsQuery = graphql(`
   query Vendors {
     vendors {
@@ -102,6 +268,7 @@ export const VendorsQuery = graphql(`
         name
         taxId
         paymentTermsDays
+        email
       }
       totalInvoices
       totalExposure
@@ -119,11 +286,87 @@ export const VendorDetailQuery = graphql(`
         name
         taxId
         paymentTermsDays
+        email
       }
       totalInvoices
       totalExposure
       avgDelayDays
       onTimePct
+    }
+  }
+`);
+
+export const CustomersQuery = graphql(`
+  query Customers {
+    customers {
+      customer {
+        id
+        name
+        taxId
+        email
+        paymentTermsDays
+        creditLimit
+        gstin
+        address
+        state
+      }
+      totalInvoices
+      totalExposure
+      avgDelayDays
+      onTimePct
+    }
+  }
+`);
+
+export const CustomerDetailQuery = graphql(`
+  query CustomerDetail($id: ID!) {
+    customer(id: $id) {
+      customer {
+        id
+        name
+        taxId
+        email
+        paymentTermsDays
+        creditLimit
+        gstin
+        address
+        state
+      }
+      totalInvoices
+      totalExposure
+      avgDelayDays
+      onTimePct
+    }
+  }
+`);
+
+export const InflowStatsQuery = graphql(`
+  query InflowStats($customerId: ID) {
+    inflowStats(customerId: $customerId) {
+      outstandingCount
+      outstandingAmount
+      overdueCount
+      overdueAmount
+      draftCount
+      disputedCount
+      settledLast30Count
+      settledLast30Amount
+      avgDaysToCollect
+      dso
+    }
+  }
+`);
+
+export const CashForecastQuery = graphql(`
+  query CashForecast {
+    cashForecast {
+      netTotal
+      buckets {
+        label
+        inflow
+        outflow
+        net
+      }
     }
   }
 `);

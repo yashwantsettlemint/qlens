@@ -1,0 +1,5 @@
+table:
+  name: ml_retrain_events
+  schema: public
+# Admin-only, read and written through the BFF/ml-service with the admin
+# secret (same as company_settings) — no per-role permissions needed here.

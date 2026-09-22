@@ -1,19 +1,82 @@
 "use client";
 
-import { useQuery } from "@apollo/client";
+import { useState } from "react";
+import { useMutation, useQuery } from "@apollo/client";
 import {
   VendorDetailQuery,
   DashboardStatsQuery,
   InvoicesQuery,
 } from "@/graphql/operations/queries";
+import { UpdateVendorEmailMutation } from "@/graphql/operations/mutations";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatStrip, Stat } from "@/components/ui/StatStrip";
 import { Panel } from "@/components/ui/Panel";
+import { Button } from "@/components/ui/Button";
+import { Callout } from "@/components/ui/Callout";
+import { Field, TextInput } from "@/components/ui/Field";
 import { DataTable } from "@/components/ui/DataTable";
 import { QueryState } from "@/components/ui/QueryState";
 import { pickInvoiceColumns } from "@/components/invoice/columns";
 import { inr, inrCompact } from "@/lib/format";
+import { useRole } from "@/lib/role";
 import type { InvoiceRow } from "@/lib/types";
+
+function VendorEmailPanel({
+  id,
+  email,
+}: {
+  id: string;
+  email: string | null | undefined;
+}) {
+  const { can } = useRole();
+  const [value, setValue] = useState(email ?? "");
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [update, { loading }] = useMutation(UpdateVendorEmailMutation);
+
+  if (!can("manageUsers")) {
+    return (
+      <Panel title="Contact email" className="mt-6">
+        <p className="text-sm text-ink-muted">{email || "None on file."}</p>
+      </Panel>
+    );
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    setSaved(false);
+    try {
+      await update({ variables: { id, email: value || null } });
+      setSaved(true);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Couldn’t save");
+    }
+  }
+
+  return (
+    <Panel title="Contact email" className="mt-6">
+      <form onSubmit={submit} className="flex items-end gap-3">
+        <Field label="Email" className="flex-1">
+          <TextInput
+            type="email"
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setSaved(false);
+            }}
+            placeholder="ap@vendor.com"
+          />
+        </Field>
+        <Button type="submit" variant="primary" disabled={loading}>
+          {loading ? "Saving…" : "Save"}
+        </Button>
+      </form>
+      {err && <Callout tone="bad" className="mt-3 text-xs">{err}</Callout>}
+      {saved && <Callout tone="ok" className="mt-3 text-xs">Saved.</Callout>}
+    </Panel>
+  );
+}
 
 const HISTORY_COLUMNS = [
   "invoiceNumber",
@@ -81,7 +144,7 @@ export default function VendorDetailPage({ params }: { params: { id: string } })
             </StatStrip>
           )}
 
-          <div className="mt-3 grid grid-cols-3 divide-x divide-line border border-line bg-surface text-sm">
+          <div className="mt-3 grid grid-cols-1 divide-line border border-line bg-surface text-sm sm:grid-cols-3 sm:divide-x">
             <div className="px-4 py-3">
               <div className="text-xs text-ink-muted">Total invoices</div>
               <div className="tabular mt-1 text-lg">{v.totalInvoices}</div>
@@ -95,6 +158,8 @@ export default function VendorDetailPage({ params }: { params: { id: string } })
               <div className="tabular mt-1 text-lg">{v.onTimePct}%</div>
             </div>
           </div>
+
+          <VendorEmailPanel id={params.id} email={v.vendor.email} />
 
           <Panel title="Invoice history" className="mt-6">
             <QueryState loading={history.loading} error={history.error} minRows={6}>

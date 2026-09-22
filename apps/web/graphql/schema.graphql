@@ -13,7 +13,39 @@ type Vendor {
   name: String!
   taxId: String
   paymentTermsDays: Int
+  email: String
   invoices: [Invoice!]!
+}
+
+"""A party we bill (accounts receivable). Mirror of Vendor."""
+type Customer {
+  id: ID!
+  name: String!
+  """PAN, historically — GST registration itself is `gstin`, not this."""
+  taxId: String
+  email: String
+  paymentTermsDays: Int
+  creditLimit: Float
+  gstin: String
+  address: String
+  """Free-text state name — compared against the company's own `state` to
+  decide CGST+SGST (same state) vs IGST (different states) on a generated
+  GST invoice."""
+  state: String
+  invoices: [Invoice!]!
+}
+
+enum InvoiceDirection {
+  PAYABLE
+  RECEIVABLE
+}
+
+"""Receivable-only lifecycle (payables use ApprovalStatus instead)."""
+enum CollectionStatus {
+  DRAFT
+  SENT
+  DISPUTED
+  SETTLED
 }
 
 type PurchaseOrder {
@@ -28,7 +60,16 @@ type PurchaseOrder {
 type Invoice {
   id: ID!
   invoiceNumber: String!
-  vendor: Vendor!
+  description: String
+  """Raw OCR-extracted text this invoice was created from, if any — embedded
+  by genai-service alongside the structured fields for richer semantic search."""
+  extractedText: String
+  direction: InvoiceDirection!
+  """Set for payables (null for receivables — use `customer`)."""
+  vendor: Vendor
+  """Set for receivables (null for payables — use `vendor`)."""
+  customer: Customer
+  collectionStatus: CollectionStatus
   purchaseOrder: PurchaseOrder
   invoiceDate: String!
   dueDate: String!
@@ -38,6 +79,10 @@ type Invoice {
   approvalStatus: ApprovalStatus!
   paymentStatus: PaymentStatus!
   source: String!
+  """Which template generateAndSendInvoice used, if it was generated that
+  way — null for invoices created by any other path (upload, manual entry,
+  CSV). Presence of this is what gates the "Resend" action."""
+  template: String
   """Days past the due date for an unpaid invoice; 0 otherwise."""
   daysOverdue: Int!
   duplicateFlag: DuplicateFlag
@@ -51,12 +96,26 @@ type DuplicateFlag {
   matchedInvoice: Invoice
   confidenceScore: Float!
   reviewedStatus: String!
+  reason: String
+  explanation: [FeatureContribution!]!
 }
 
 type DelayPrediction {
   delayProbability: Float!
   predictedDelayDays: Int!
   modelVersion: String!
+  explanation: [FeatureContribution!]!
+}
+
+"""One feature's signed contribution to a single prediction — the
+explainable-AI backing for delay risk and duplicate matches, computed from
+the model itself (XGBoost pred_contribs), not a hand-written heuristic."""
+type FeatureContribution {
+  feature: String!
+  label: String!
+  value: Float!
+  contribution: Float!
+  direction: String!
 }
 
 type Payment {
@@ -120,6 +179,49 @@ type VendorExposure {
   outstanding: Float!
 }
 
+type CustomerStats {
+  customer: Customer!
+  totalInvoices: Int!
+  totalExposure: Float!
+  avgDelayDays: Float!
+  onTimePct: Float!
+}
+
+type CustomerExposure {
+  customerId: ID!
+  customerName: String!
+  outstanding: Float!
+}
+
+"""Accounts-receivable dashboard block (mirror of DashboardStats for money in)."""
+type InflowStats {
+  outstandingCount: Int!
+  outstandingAmount: Float!
+  overdueCount: Int!
+  overdueAmount: Float!
+  draftCount: Int!
+  disputedCount: Int!
+  settledLast30Count: Int!
+  settledLast30Amount: Float!
+  avgDaysToCollect: Float
+  """Days sales outstanding."""
+  dso: Float
+}
+
+type CashForecastBucket {
+  label: String!
+  """Predicted receipts landing in this window (unpaid receivables, due date + predicted delay)."""
+  inflow: Float!
+  """Predicted payments leaving in this window (unpaid payables, same basis)."""
+  outflow: Float!
+  net: Float!
+}
+
+type CashForecast {
+  buckets: [CashForecastBucket!]!
+  netTotal: Float!
+}
+
 type InvoicePage {
   rows: [Invoice!]!
   total: Int!
@@ -128,11 +230,14 @@ type InvoicePage {
 }
 
 input InvoiceFilter {
+  direction: InvoiceDirection
   vendorId: ID
+  customerId: ID
   department: String
   dateFrom: String
   dateTo: String
   approvalStatus: ApprovalStatus
+  collectionStatus: CollectionStatus
   paymentStatus: PaymentStatus
   source: String
   q: String
@@ -145,7 +250,12 @@ input InvoiceSort {
 
 input InvoiceInput {
   invoiceNumber: String!
-  vendorId: ID!
+  description: String
+  extractedText: String
+  """PAYABLE (default) needs vendorId; RECEIVABLE needs customerId."""
+  direction: InvoiceDirection
+  vendorId: ID
+  customerId: ID
   purchaseOrderId: ID
   invoiceDate: String!
   dueDate: String!
@@ -175,10 +285,157 @@ type Query {
   dashboardStats(vendorId: ID): DashboardStats!
   invoices(filter: InvoiceFilter, sort: InvoiceSort, page: Int = 1, pageSize: Int = 25): InvoicePage!
   invoice(id: ID!): Invoice
+  invoiceSummary(id: ID!): String!
   vendors: [VendorStats!]!
   vendor(id: ID!): VendorStats
   vendorExposure(vendorId: ID): [VendorExposure!]!
+  customers: [CustomerStats!]!
+  customer(id: ID!): CustomerStats
+  customerExposure(customerId: ID): [CustomerExposure!]!
+  inflowStats(customerId: ID): InflowStats!
+  cashForecast: CashForecast!
   ask(prompt: String!): AskAnswer!
+  companySettings: CompanySettings!
+  mlModelStatus: MlModelStatus!
+  mlDriftStatus: [MlDriftReport!]!
+  mlRetrainHistory(limit: Int): [MlRetrainEvent!]!
+  reviewQueue(status: String = "pending"): [ReviewQueueItem!]!
+  demoRequests(limit: Int): [DemoRequest!]!
+}
+
+# Submitted from the public landing page's "Book a demo" form — admin-only,
+# not tied to any company (the submitter isn't a signed-up customer yet).
+type DemoRequest {
+  id: ID!
+  companyName: String!
+  contactName: String!
+  workEmail: String!
+  companySize: String
+  message: String
+  createdAt: String!
+}
+
+type CompanySettings {
+  name: String!
+  aliases: [String!]!
+  """Saved default digital signature (a data: URL PNG), stamped on every
+  generated invoice from Settings -> Signature. Null until one is saved."""
+  signatureDataUrl: String
+  """Saved company logo (a data: URL image), printed in the invoice header.
+  Null until one is uploaded from Settings -> Logo."""
+  logoDataUrl: String
+  gstin: String
+  pan: String
+  address: String
+  """Free-text state name — compared against a customer's own `state` to
+  decide CGST+SGST (same state) vs IGST (different states)."""
+  state: String
+  bankAccountName: String
+  bankName: String
+  bankAccountNumber: String
+  bankIfsc: String
+  bankSwift: String
+}
+
+input LineItemInput {
+  description: String!
+  """The person/role sub-line under the description, e.g. "Jane Doe -
+  Kubernetes Engineer" on a services invoice."""
+  note: String
+  quantity: Float!
+  unitPrice: Float!
+  """e.g. "Days", "Hours", "Units" — printed next to the quantity."""
+  unit: String
+  hsnSac: String
+  """Per-line GST %, not an invoice-level flat tax — the invoice's total tax
+  is the sum of each line's own taxable value × its own gstRate, grouped by
+  (hsnSac, gstRate) in the generated PDF's tax table."""
+  gstRate: Float
+}
+
+input GenerateInvoiceInput {
+  customerId: ID!
+  invoiceNumber: String!
+  invoiceDate: String!
+  dueDate: String!
+  notes: String
+  """One of "classic" | "modern" | "minimal" | "sidebar" | "compact"."""
+  template: String!
+  """Buyer's purchase order number — printed on the invoice if given."""
+  buyerOrderNo: String
+  """E-invoice acknowledgement number — printed on the invoice if given."""
+  ackNo: String
+  lineItems: [LineItemInput!]!
+}
+
+# extractedFieldsJson / sourceMapJson: JSON.stringify of the OCR draft's
+# extracted_fields / source_map (arbitrary shape from the OCR/LLM read) — kept
+# as strings rather than adding a custom JSON scalar; the client JSON.parses
+# them back into the same shape /api/ocr returns.
+type ReviewQueueItem {
+  id: ID!
+  status: String!
+  issues: [String!]!
+  createdAt: String!
+  filename: String
+  direction: String
+  counterpartyName: String
+  extractedFieldsJson: String!
+  sourceMapJson: String!
+  fullText: String
+}
+
+type MlModelMetrics {
+  rocAuc: Float
+  accuracy: Float
+  precision: Float
+  recall: Float
+  maeDays: Float
+  r2: Float
+}
+
+type MlModel {
+  status: String!
+  method: String!
+  modelVersion: String
+  trainedAt: String
+  nRows: Int
+  featureCount: Int
+  threshold: Float
+  metrics: MlModelMetrics
+}
+
+type MlModelStatus {
+  duplicate: MlModel!
+  delay: MlModel!
+}
+
+# featurePsiJson / rollingMetricsJson / baselineMetricsJson: JSON.stringify of
+# {feature: psi} / metric blobs — kept as strings rather than adding a custom
+# JSON scalar (same convention as ReviewQueueItem's *Json fields above), since
+# their shape varies per model (duplicate has no feature_psi, for instance).
+type MlDriftReport {
+  modelName: String!
+  checkedAt: String!
+  driftDetected: Boolean!
+  featurePsiJson: String!
+  rollingMetricsJson: String!
+  baselineMetricsJson: String!
+  notes: String
+}
+
+type MlRetrainEvent {
+  id: ID!
+  modelName: String!
+  triggeredBy: String!
+  startedAt: String!
+  finishedAt: String
+  status: String!
+  oldVersion: String
+  newVersion: String
+  oldMetrics: MlModelMetrics
+  newMetrics: MlModelMetrics
+  error: String
 }
 
 type Mutation {
@@ -188,4 +445,38 @@ type Mutation {
   recordPayment(invoiceId: ID!, paidAt: String!, amountPaid: Float!): Payment!
   createInvoice(input: InvoiceInput!): Invoice!
   importInvoices(rows: [InvoiceInput!]!): ImportResult!
+  deleteInvoice(id: ID!): Boolean!
+  createVendor(name: String!, taxId: String, paymentTermsDays: Int, email: String): Vendor!
+  updateVendorEmail(id: ID!, email: String): Vendor!
+  createCustomer(name: String!, taxId: String, email: String, paymentTermsDays: Int, creditLimit: Float): Customer!
+  updateCustomerEmail(id: ID!, email: String): Customer!
+  updateCustomerTaxDetails(id: ID!, gstin: String, address: String, state: String): Customer!
+  setCollectionStatus(id: ID!, status: CollectionStatus!): Invoice!
+  updateCompanySettings(name: String!, aliases: [String!]!): CompanySettings!
+  saveCompanySignature(dataUrl: String!): CompanySettings!
+  saveCompanyLogo(dataUrl: String!): CompanySettings!
+  updateCompanyTaxDetails(
+    gstin: String
+    pan: String
+    address: String
+    state: String
+    bankAccountName: String
+    bankName: String
+    bankAccountNumber: String
+    bankIfsc: String
+    bankSwift: String
+  ): CompanySettings!
+  """Creates a receivable invoice (with line items) from a template, renders
+  it as a PDF stamped with the company's saved signature, and emails it to
+  the customer — the invoice is created and tracked either way, even if the
+  email itself fails to send."""
+  generateAndSendInvoice(input: GenerateInvoiceInput!): Invoice!
+  """Re-renders and re-sends a previously generated invoice using its saved
+  template, line items and the company's current signature. Only valid for
+  invoices generateAndSendInvoice created (i.e. `template` is set)."""
+  resendInvoice(id: ID!): Boolean!
+  setReviewQueueStatus(id: ID!, status: String!): ReviewQueueItem!
+  triggerDriftCheck: [MlDriftReport!]!
+  triggerModelRetrain(modelName: String!): MlRetrainEvent!
+  deleteDemoRequest(id: ID!): Boolean!
 }

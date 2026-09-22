@@ -16,18 +16,18 @@ export function Panel({
   return (
     <section
       className={cn(
-        "border bg-surface",
+        "rounded-xl border bg-surface shadow-card",
         accent ? "border-genai/30" : "border-line",
         className,
       )}
     >
       {title != null && (
-        <header className="flex items-center justify-between border-b border-line px-4 py-2.5">
-          <h2 className="text-sm font-medium text-ink">{title}</h2>
+        <header className="flex items-center justify-between border-b border-line px-5 py-3">
+          <h2 className="text-[15px] font-semibold tracking-tight text-ink">{title}</h2>
           {actions}
         </header>
       )}
-      <div className="p-4">{children}</div>
+      <div className="p-5">{children}</div>
     </section>
   );
 }

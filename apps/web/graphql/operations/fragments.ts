@@ -14,7 +14,13 @@ export const InvoiceRowFields = graphql(`
     paymentStatus
     source
     daysOverdue
+    direction
+    collectionStatus
     vendor {
+      id
+      name
+    }
+    customer {
       id
       name
     }

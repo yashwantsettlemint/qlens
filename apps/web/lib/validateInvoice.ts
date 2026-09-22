@@ -2,7 +2,10 @@ import { DEPARTMENTS, INVOICE_SOURCES } from "./constants";
 
 export interface InvoiceInputShape {
   invoiceNumber: string;
-  vendorId: string;
+  description?: string | null;
+  direction?: "PAYABLE" | "RECEIVABLE";
+  vendorId?: string;
+  customerId?: string;
   purchaseOrderId?: string | null;
   invoiceDate: string;
   dueDate: string;
@@ -13,18 +16,22 @@ export interface InvoiceInputShape {
 }
 
 /**
- * Row-level validation shared by manual entry, CSV import preview, and the mock
- * import resolver — so the preview shows exactly the errors a commit would hit.
- * Returns the first problem, or null when the row is valid.
+ * Row-level validation shared by manual entry, CSV import preview, document
+ * upload, and the mock import resolver — so the preview shows exactly the
+ * errors a commit would hit. Returns the first problem, or null when the row
+ * is valid. `knownPartyIds` is vendor ids for a payable (the default, and the
+ * only direction manual entry/CSV support today), customer ids for a receivable.
  */
 export function validateInvoiceInput(
   input: Partial<InvoiceInputShape>,
-  knownVendorIds: Set<string>,
+  knownPartyIds: Set<string>,
 ): string | null {
   if (!input.invoiceNumber || !String(input.invoiceNumber).trim())
     return "Invoice number is required";
-  if (!input.vendorId || !knownVendorIds.has(input.vendorId))
-    return "Vendor not recognised";
+  const receivable = input.direction === "RECEIVABLE";
+  const partyId = receivable ? input.customerId : input.vendorId;
+  if (!partyId || !knownPartyIds.has(partyId))
+    return receivable ? "Customer not recognised" : "Vendor not recognised";
   if (!input.department || !DEPARTMENTS.includes(input.department as (typeof DEPARTMENTS)[number]))
     return `Department must be one of: ${DEPARTMENTS.join(", ")}`;
   const amount = Number(input.amount);

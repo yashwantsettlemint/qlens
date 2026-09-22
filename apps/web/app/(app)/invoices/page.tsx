@@ -4,7 +4,7 @@ import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "@apollo/client";
 import { InvoicesQuery, VendorsQuery } from "@/graphql/operations/queries";
-import { ApproveInvoicesMutation } from "@/graphql/operations/mutations";
+import { ApproveInvoicesMutation, DeleteInvoiceMutation } from "@/graphql/operations/mutations";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Panel } from "@/components/ui/Panel";
 import { DataTable, type SortState } from "@/components/ui/DataTable";
@@ -27,7 +27,6 @@ const COLUMNS = [
   "dueDate",
   "amount",
   "duplicate",
-  "risk",
   "approval",
   "payment",
 ];
@@ -79,13 +78,17 @@ function Invoices() {
   );
 
   const vendors = useQuery(VendorsQuery);
-  const { data, loading, error } = useQuery(InvoicesQuery, {
+  const { data, loading, error, refetch } = useQuery(InvoicesQuery, {
     variables: { filter, sort, page, pageSize: PAGE_SIZE },
   });
   const [approve, approveState] = useMutation(ApproveInvoicesMutation, {
     refetchQueries: ["Invoices", "DashboardStats"],
     awaitRefetchQueries: true,
+    onError: () => {}, // shown in the selection bar via approveState.error
   });
+  const [deleteInvoice] = useMutation(DeleteInvoiceMutation, { onError: () => {} });
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const rows = (data?.invoices.rows ?? []) as InvoiceRow[];
   const total = data?.invoices.total ?? 0;
@@ -105,8 +108,28 @@ function Invoices() {
       .filter((r) => selected.has(r.id) && r.approvalStatus === "PENDING")
       .map((r) => r.id);
     if (ids.length === 0) return;
-    await approve({ variables: { ids } });
+    const res = await approve({ variables: { ids } });
+    if (!res.errors?.length) setSelected(new Set());
+  }
+
+  async function deleteSelected() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} invoice${ids.length === 1 ? "" : "s"}? This can't be undone.`))
+      return;
+    setDeleting(true);
+    setDeleteError(null);
+    const results = await Promise.all(
+      ids.map((id) => deleteInvoice({ variables: { id }, refetchQueries: [] })),
+    );
+    setDeleting(false);
+    const failed = results.filter((r) => r.errors?.length).length;
+    if (failed > 0) {
+      setDeleteError(`${failed} of ${ids.length} couldn't be deleted.`);
+    }
     setSelected(new Set());
+    // one shared refetch after the batch, rather than one per delete
+    await refetch();
   }
 
   function exportSelected() {
@@ -114,7 +137,7 @@ function Invoices() {
     const csv = toCsv(
       chosen.map((r) => ({
         invoiceNumber: r.invoiceNumber,
-        vendor: r.vendor.name,
+        vendor: r.vendor?.name ?? "",
         department: r.department,
         invoiceDate: fmtDate(r.invoiceDate),
         dueDate: fmtDate(r.dueDate),
@@ -246,9 +269,18 @@ function Invoices() {
             </Button>
           )}
           <Button onClick={exportSelected}>Export selected to CSV</Button>
+          {can("deleteInvoice") && (
+            <Button variant="danger" onClick={deleteSelected} disabled={deleting}>
+              Delete selected
+            </Button>
+          )}
           <Button variant="ghost" onClick={() => setSelected(new Set())}>
             Clear selection
           </Button>
+          {approveState.error && (
+            <span className="text-bad-fg">{approveState.error.message}</span>
+          )}
+          {deleteError && <span className="text-bad-fg">{deleteError}</span>}
         </div>
       )}
 

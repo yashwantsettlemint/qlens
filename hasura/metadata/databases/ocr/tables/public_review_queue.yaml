@@ -1,0 +1,27 @@
+table:
+  name: review_queue
+  schema: public
+select_permissions:
+  - role: finance_user
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: company_admin
+    permission:
+      columns: "*"
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+update_permissions:
+  - role: finance_user
+    permission:
+      # a reviewer resolves a draft: pending -> committed | rejected
+      columns:
+        - status
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      check: {}
+  - role: company_admin
+    permission:
+      columns:
+        - status
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      check: {}
+# Inserts come from ocr-service / ingestion-service with the admin secret.

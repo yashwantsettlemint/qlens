@@ -1,0 +1,6 @@
+table:
+  name: companies
+  schema: public
+# One row per tenant. Read/written through the BFF with the admin secret
+# (register/invite flow goes through auth-service, not Hasura directly) —
+# no per-role permissions needed here, same as company_settings before it.

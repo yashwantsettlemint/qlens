@@ -17,6 +17,7 @@ interface VendorOption {
 
 const empty = {
   invoiceNumber: "",
+  description: "",
   vendorId: "",
   department: "",
   invoiceDate: "2026-09-07",
@@ -123,6 +124,16 @@ export function ManualInvoiceForm({ vendors }: { vendors: VendorOption[] }) {
           />
         </Field>
       </div>
+
+      <Field label="Summary — what this invoice is about">
+        <textarea
+          value={form.description}
+          onChange={(e) => set("description", e.target.value)}
+          rows={2}
+          placeholder="e.g. Q3 cloud hosting and support retainer"
+          className="w-full rounded-lg border border-line bg-surface px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent"
+        />
+      </Field>
 
       {error && <Callout tone="bad">{error}</Callout>}
       {data?.createInvoice && (

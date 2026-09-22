@@ -1,7 +1,7 @@
 import { cn } from "@/lib/cn";
 
 const controlBase =
-  "h-8 rounded border border-line bg-surface px-2 text-sm text-ink outline-none focus:border-accent disabled:opacity-50";
+  "h-9 rounded-lg border border-line bg-surface px-2.5 text-sm text-ink outline-none focus:border-accent disabled:opacity-50";
 
 export function Label({ children }: { children: React.ReactNode }) {
   return <span className="mb-1 block text-xs text-ink-muted">{children}</span>;

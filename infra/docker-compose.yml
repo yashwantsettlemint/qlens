@@ -1,14 +1,13 @@
 name: invoice-tracker
 
 # Foundation stack: Postgres + Hasura (migrations & metadata auto-applied) + a
-# one-shot seed loader. The four FastAPI services are wired in the block at the
-# bottom — uncomment as each is built (services pass).
+# one-shot seed loader + the FastAPI services.
 #
 # All services read infra/.env via env_file.
 
 services:
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16   # postgres:16 + the `vector` extension (RAG); data dir is compatible
     restart: unless-stopped
     env_file: [.env]
     ports:
@@ -16,11 +15,29 @@ services:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 12
+
+  rabbitmq:  # queue for ocr-service's bulk document upload (POST /bulk/enqueue)
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    ports:
+      # host 5673/15673 — an unrelated RabbitMQ elsewhere on this machine can
+      # squat the 5672/15672 defaults; containers still talk over 5672 on the
+      # internal compose network regardless of this host-side mapping.
+      - "5673:5672"    # amqp
+      - "15673:15672"  # management UI, http://localhost:15673 (guest/guest)
+    healthcheck:
+      # -diagnostics spins up a fresh Erlang node each call, which can take
+      # a few seconds on its own — a 5s timeout was failing that alone.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 15s
+      retries: 24
 
   hasura:
     image: hasura/graphql-engine:v2.42.0.cli-migrations-v3
@@ -46,7 +63,7 @@ services:
       retries: 24
 
   seed:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     restart: "no"
     env_file: [.env]
     depends_on:
@@ -88,6 +105,10 @@ services:
       HASURA_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-devsecret}
     ports:
       - "8092:8002"
+    volumes:
+      # host-trained models win over the ones baked into the image; retrain then
+      # `docker compose restart ml-service` — no rebuild. Delete to use image models.
+      - ../services/ml-service/models:/svc/service/models
     depends_on:
       hasura:
         condition: service_healthy
@@ -95,7 +116,7 @@ services:
       <<: *pyhealth
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\""]
 
-  genai-service:  # authenticates to Hasura as role genai_readonly only (self-minted JWT)
+  genai-service:  # reads Hasura as genai_readonly; /embed alone uses the admin secret to write invoice_embeddings
     build:
       context: ..
       dockerfile: services/genai-service/Dockerfile
@@ -103,6 +124,12 @@ services:
     env_file: [.env]
     environment:
       HASURA_ENDPOINT: http://hasura:8080/v1/graphql
+      HASURA_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-devsecret}  # /embed write path only
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      # the model is baked into the image at build time (see Dockerfile) — skip
+      # the HF Hub freshness check so a network hiccup can't stall/retry every
+      # embed call for ~30s (5 retries w/ backoff) chasing a check we don't need.
+      HF_HUB_OFFLINE: "1"
     ports:
       - "8093:8003"
     depends_on:
@@ -130,7 +157,7 @@ services:
       <<: *pyhealth
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8004/health')\""]
 
-  auth-service:  # mock login -> Hasura-shaped HS256 JWTs (dev only)
+  auth-service:  # DB-backed accounts -> Hasura-shaped HS256 JWTs; register/invite live here
     build:
       context: ..
       dockerfile: services/auth-service/Dockerfile
@@ -138,9 +165,36 @@ services:
     env_file: [.env]
     ports:
       - "8095:8005"
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       <<: *pyhealth
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8005/health')\""]
+
+  ocr-service:  # CPU OCR + field extraction; writes invalid drafts to review_queue (admin)
+    build:
+      context: ..
+      dockerfile: services/ocr-service/Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      HASURA_ENDPOINT: http://hasura:8080/v1/graphql
+      HASURA_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-devsecret}
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    ports:
+      # host 8096; container 8006 (the 6th service, past the brief's 8001-8005)
+      - "8096:8006"
+    depends_on:
+      hasura:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      <<: *pyhealth
+      # first request can be slow (PP-StructureV3 model load); generous start
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8006/health')\""]
+      retries: 12
 
 volumes:
   pgdata:

@@ -1,22 +1,26 @@
 import { cn } from "@/lib/cn";
-import { riskTone } from "@/lib/risk";
+import { riskTone, type DelayPredictionLike } from "@/lib/risk";
 import { toneDot } from "@/lib/status";
 
 /**
- * Delay-risk indicator: green / amber / red by delayProbability. Uses the
- * traffic-light tones only — never the duplicate violet.
+ * Delay-risk indicator: green / amber / red by delayProbability, labeled by
+ * predicted days late (the number finance actually acts on) — never the
+ * traffic-light tones only, other than duplicate violet.
  */
 export function RiskDot({
-  probability,
+  pred,
   withLabel = false,
 }: {
-  probability: number | null | undefined;
+  pred: DelayPredictionLike | null | undefined;
   withLabel?: boolean;
 }) {
-  if (probability == null) return <span className="text-ink-muted">—</span>;
-  const v = riskTone(probability);
+  if (pred == null) return <span className="text-ink-muted">—</span>;
+  const v = riskTone(pred);
   return (
-    <span className="inline-flex items-center gap-1.5" title={`${v.label} chance of late payment`}>
+    <span
+      className="inline-flex items-center gap-1.5"
+      title={`${Math.round(pred.delayProbability * 100)}% chance of late payment, ~${pred.predictedDelayDays}d`}
+    >
       <span className={cn("h-2 w-2 shrink-0 rounded-full", toneDot[v.tone])} />
       {withLabel && <span className="tabular text-xs">{v.label}</span>}
     </span>

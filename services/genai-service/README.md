@@ -1,29 +1,52 @@
 # genai-service
 
-LLM summaries / explanations over the invoice data. Authenticates to Hasura **only** as
-`genai_readonly` (self-minted JWT, never the admin secret) and **only** through the
-whitelist in `app/whitelist.py` — no schema introspection, no arbitrary tables.
+LLM summaries / explanations **and hybrid RAG** over the invoice data.
+Authenticates to Hasura as `genai_readonly` (self-minted JWT, never the admin secret) and
+only through the whitelist in `app/whitelist.py` / the tracked `match_invoice_embeddings`
+function. The **one exception** is `/embed`, which uses `HASURA_ADMIN_SECRET` to read full
+invoice context and write `invoice_embeddings`.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| POST | `/summarize` | `{question}` | `{summary, invoice_ids, row_count, query}` |
-| POST | `/explain-duplicate` | `{invoice_id}` | `{explanation, confidence_score, method, matched_invoice_id}` — explains the **existing** flag, never re-derives |
-| POST | `/extract-ocr` | multipart PDF | `{status, source, fields: {name: {value, confidence}}}` — reads the PDF **text layer** (LLM, or offline regex). Image / scanned PDFs have no text layer → `status: "pending_review"` (needs a vision provider — see `app/ocr.py`) |
-| GET | `/health` | — | `{status, llm: "offline" | "azure-openai"}` |
+| POST | `/summarize` | `{question}` | `{summary, invoice_ids, row_count, query}` — structured (text→GraphQL) only |
+| POST | `/query` | `{question}` | `{answer, route, invoice_ids, structured, semantic}` — **hybrid** router |
+| POST | `/embed` | Hasura event payload, or `{invoice_id}` | `{status, invoice_id, ...}` — (re)builds the invoice's embedding row |
+| POST | `/explain-duplicate` | `{invoice_id}` | `{explanation, confidence_score, method, matched_invoice_id}` |
+| POST | `/extract-ocr` | multipart PDF | `{status, source, fields}` — PDF **text layer** only; scans go to `services/ocr-service` |
+| GET | `/health` | — | `{status, llm}` |
 
-**LLM path** (`/summarize`): the model gets one `query_invoices` tool constrained to the
-four whitelisted tables; it picks table + `where` + `order_by`, we build + run the query as
-`genai_readonly`, then it summarises the rows. `/explain-duplicate` passes the stored
-score + matched fields and asks for a plain-language paragraph.
+## Hybrid RAG (`/query`)
 
-**Offline** (no `AZURE_OPENAI_*`): a keyword router picks the query and a template writes
-the summary. `/extract-ocr` falls back to regex field-matching. Everything works, just
-less fluent.
+Aggregation / filter questions ("total exposure to vendor X", "how many overdue") have
+**exact** answers in Postgres — they take the text→GraphQL path, never vector search.
+Vector search is only for genuinely semantic questions ("similar to this one", "invoices
+that mention a penalty").
 
-**`/extract-ocr`**: `pypdf` pulls the text layer; the LLM (tool call) or, offline, a set
-of regexes map it to `{value, confidence}` per field. No text layer (scanned image) →
-`pending_review` with an empty skeleton — real OCR needs a vision provider, plugged into
-the fallback branch in `app/main.py`.
+- **Router** (`app/rag.classify_question`): keyword heuristics first
+  (`total`/`how many`/`overdue` → structured; `similar to`/`mention` → semantic; both →
+  `both`). Ambiguous → one LLM classification call, **biased to `structured`** (a wrong
+  structured query is easy to catch; a wrong semantic guess presented as fact is not).
+  Offline → always `structured`.
+- **Structured** path: the existing whitelisted text→GraphQL flow, as `genai_readonly`.
+- **Semantic** path: embed the question (CPU, `all-MiniLM-L6-v2`, 384-dim), call
+  `match_invoice_embeddings(query, k)` — a tracked Postgres/pgvector function, run as
+  `genai_readonly` — for cosine top-k.
+- **Synthesis**: one LLM call merges both result sets (structured totals win on conflict).
+  Offline → a template.
+- Embeddings unavailable (model not loaded) → semantic path is skipped, not a 500.
+
+## Indexing (`/embed`)
+
+Hasura event trigger `invoice_embed` fires on `invoices` INSERT/UPDATE → `POST /embed`
+(async, doesn't block the write). It builds **one chunk per invoice** (structured text via
+`app/chunking.py` — not fixed-size splitting), embeds it, and upserts `invoice_embeddings`
+via `upsert_invoice_embedding()` with the admin secret. Storage is **pgvector on the
+existing Postgres** — no separate vector database.
+
+## Offline (no LLM configured)
+
+Keyword router + templates for `/summarize` and `/query`; `/extract-ocr` uses regex. The
+embedding model still runs (it's CPU / local), so semantic search works offline too.
 
 ## Config
 
@@ -31,16 +54,21 @@ the fallback branch in `app/main.py`.
 |---|---|
 | `HASURA_ENDPOINT` | `http://localhost:8088/v1/graphql` |
 | `HASURA_GRAPHQL_JWT_SECRET` | (required — to mint the genai_readonly token) |
-| `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_KEY` / `AZURE_OPENAI_DEPLOYMENT` | unset → offline |
-| `AZURE_OPENAI_API_VERSION` | `2024-06-01` |
+| `HASURA_ADMIN_SECRET` | (required for `/embed`; unset → `/embed` returns `skipped`) |
+| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` (must be 384-dim) |
+| `EMBEDDING_DIM` | `384` |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | any OpenAI-compatible endpoint (Groq, OpenAI, Ollama…); unset → offline |
+| `AZURE_OPENAI_ENDPOINT` / `_KEY` / `_DEPLOYMENT` / `_API_VERSION` | alternative to `LLM_*` |
 
 ## Run
 
 ```bash
 python -m venv .venv && . .venv/Scripts/activate
-pip install -e ../../packages/shared-types -e .
-python tests/test_query_builder.py && python tests/test_ocr.py
+pip install -e ../../packages/shared-types -e .          # pulls torch (CPU) + sentence-transformers
+python tests/test_query_builder.py && python tests/test_ocr.py \
+  && python tests/test_chunking.py && python tests/test_rag_router.py
 uvicorn app.main:app --port 8093
-curl -s localhost:8093/summarize -d '{"question":"which invoices are overdue?"}' -H 'content-type: application/json'
+curl -s localhost:8093/query -d '{"question":"which invoices are overdue?"}' -H 'content-type: application/json'
 ```
-In the stack: host port **8093**, container 8003.
+In the stack: host port **8093**, container 8003. First Docker build downloads the
+embedding model (~90 MB) and CPU torch — the image is large.

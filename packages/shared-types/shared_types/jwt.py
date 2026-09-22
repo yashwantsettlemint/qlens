@@ -38,6 +38,7 @@ def mint_hasura_jwt(
     ttl_seconds: int = 3600,
     secret_raw: str | None = None,
     extra_claims: dict[str, Any] | None = None,
+    extra_hasura_claims: dict[str, Any] | None = None,
 ) -> str:
     alg, key = parse_jwt_secret(secret_raw)
     now = int(time.time())
@@ -50,6 +51,7 @@ def mint_hasura_jwt(
             "x-hasura-default-role": role,
             "x-hasura-allowed-roles": allowed_roles or [role],
             "x-hasura-user-id": user_id,
+            **(extra_hasura_claims or {}),
         },
     }
     if extra_claims:

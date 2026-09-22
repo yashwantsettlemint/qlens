@@ -9,9 +9,17 @@ import { cn } from "@/lib/cn";
 import { ManualInvoiceForm } from "@/components/upload/ManualInvoiceForm";
 import { CsvDropzone } from "@/components/upload/CsvDropzone";
 import { CsvPreviewTable } from "@/components/upload/CsvPreviewTable";
+import { BulkDocumentUpload } from "@/components/upload/BulkDocumentUpload";
+import { ReviewQueuePanel } from "@/components/upload/ReviewQueuePanel";
 import type { ParsedInvoiceRow } from "@/lib/csv";
 
-type Tab = "manual" | "csv";
+type Tab = "manual" | "documents" | "csv";
+
+const TAB_LABEL: Record<Tab, string> = {
+  manual: "Manual entry",
+  documents: "Documents (PDF / image)",
+  csv: "CSV upload",
+};
 
 export default function UploadPage() {
   const [tab, setTab] = useState<Tab>("manual");
@@ -26,10 +34,10 @@ export default function UploadPage() {
 
   return (
     <>
-      <PageHeader title="Add invoices" meta="Enter one by hand, or import a CSV" />
+      <PageHeader title="Add invoices" meta="Enter one by hand, scan documents, or import a CSV" />
 
       <div className="mb-4 flex gap-1 border-b border-line">
-        {(["manual", "csv"] as Tab[]).map((t) => (
+        {(["manual", "documents", "csv"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -40,16 +48,25 @@ export default function UploadPage() {
                 : "border-transparent text-ink-muted hover:text-ink",
             )}
           >
-            {t === "manual" ? "Manual entry" : "CSV upload"}
+            {TAB_LABEL[t]}
           </button>
         ))}
       </div>
 
-      {tab === "manual" ? (
+      {tab === "manual" && (
         <Panel>
           <ManualInvoiceForm vendors={vendors} />
         </Panel>
-      ) : (
+      )}
+
+      {tab === "documents" && (
+        <div className="space-y-6">
+          <BulkDocumentUpload />
+          <ReviewQueuePanel />
+        </div>
+      )}
+
+      {tab === "csv" && (
         <div className="space-y-4">
           <CsvDropzone
             vendors={vendors}

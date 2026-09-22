@@ -1,10 +1,8 @@
-# Payables Desk — Invoice Processing & Vendor Payment Tracker
+# Qlens — Invoice Processing & Vendor Payment Tracker
 
 Internal AP tool frontend. Next.js (App Router) + TypeScript + Tailwind, Apollo Client.
-By default every screen runs on a **fully mocked** in-browser GraphQL layer — no backend.
-Set `NEXT_PUBLIC_BACKEND=hasura` and the same operations go through `/api/graphql` (a Next
-server route) to the real Hasura + genai-service instead. See *Running against the real
-backend* below.
+Every operation goes through `/api/graphql` (a Next server route) to Hasura + genai-service.
+See *Running against the real backend* below.
 
 ## Run it
 
@@ -40,13 +38,10 @@ expires; a tab left past expiry lands back on `/login`.
 ## Architecture
 
 ```
-graphql/schema.graphql     the GraphQL contract — mock resolvers, codegen, and real Hasura all share it
+graphql/schema.graphql     the GraphQL contract — codegen and the BFF resolvers share it
 graphql/operations/*.ts     typed query/mutation documents (graphql() from codegen client-preset)
 graphql/generated/          codegen output (gitignored; run `npm run codegen`)
-mock/data.ts                seeded, deterministic dataset (Indian vendors, INR, GST) — mutable in-session
-mock/resolvers.ts           resolves queries against mock/data with real filter/sort/paginate; mutations mutate it
-mock/schema.ts              makeExecutableSchema(schema.graphql, resolvers)
-lib/apollo.ts               SchemaLink (mock) vs HttpLink -> /api/graphql (real) — the whole swap
+lib/apollo.ts               HttpLink -> /api/graphql, plus the 401 -> /login error link
 lib/status.ts               the status colour vocabulary — every badge/dot/rule reads from here
 lib/format.ts  risk.ts  csv.ts  validateInvoice.ts   shared business logic (formatting, thresholds, CSV, validation)
 server/                     BFF only: resolvers.ts (Hasura-backed), hasura.ts (role-scoped JWT / admin), jwt.ts (HS256 verify+sign), auth.ts (per-request role gate)
@@ -64,7 +59,6 @@ Bring up the stack (`infra/docker-compose.yml`), then in `apps/web/.env.local`
 (see `.env.example`):
 
 ```
-NEXT_PUBLIC_BACKEND=hasura
 NEXT_PUBLIC_AUTH_URL=http://localhost:8095          # browser -> auth-service /login,/refresh
 HASURA_ENDPOINT=http://localhost:8088/v1/graphql    # server-only from here down
 HASURA_ADMIN_SECRET=devsecret
@@ -83,10 +77,8 @@ regenerate types from the live schema, point `schema` in `codegen.ts` at the end
 
 ## Notes
 
-- Data pages are client components (`"use client"`) using Apollo hooks; the mock executable
-  schema is bundled to the client so SchemaLink can run without a server. With
-  `NEXT_PUBLIC_BACKEND=hasura` it's unused — dynamic-import it if bundle size
-  matters (`ponytail:` comment in `lib/apollo.ts`).
+- Data pages are client components (`"use client"`) using Apollo hooks, talking to
+  `/api/graphql`.
 - `npm audit` flags dev/build-time transitive deps (eslint's `glob`, bundled `postcss`) and
   Next itself against advisory ranges that its 14.2.x security backports already cover.
   `next@14.2.35` is the latest patched 14.2. `npm audit fix --force` would pull `next@16`

@@ -13,15 +13,26 @@ export interface Claims {
   exp: number;
   role: string;
   user: string;
+  companyId: string;
 }
 
 const HASURA_NS = "https://hasura.io/jwt/claims";
 const b64url = (b: Buffer) => b.toString("base64url");
 
-/** Re-mint a short-lived Hasura JWT carrying `claims.role` as the default role. */
+/**
+ * Hasura's role literally named "admin" is a reserved super-role that
+ * bypasses every permission check (including company_id filtering) no
+ * matter what's configured for it — so the app's "admin" business role must
+ * never be minted as Hasura role "admin". Mirrors _HASURA_ROLE in
+ * services/auth-service/app/main.py.
+ */
+const HASURA_ROLE: Record<string, string> = { admin: "company_admin" };
+
+/** Re-mint a short-lived Hasura JWT carrying `claims.role` (translated) as the default role. */
 export function signHS256(claims: Claims, secretRaw: string, ttlSeconds = 300): string {
   const k = key(secretRaw);
   if (!k) throw new Error("HASURA_GRAPHQL_JWT_SECRET is not set");
+  const hasuraRole = HASURA_ROLE[claims.role] ?? claims.role;
   const now = Math.floor(Date.now() / 1000);
   const header = b64url(Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })));
   const payload = b64url(
@@ -30,10 +41,12 @@ export function signHS256(claims: Claims, secretRaw: string, ttlSeconds = 300): 
         sub: claims.user,
         iat: now - 60, // absorb clock skew — Hasura rejects a future iat
         exp: now + ttlSeconds,
+        app_role: claims.role,
         [HASURA_NS]: {
-          "x-hasura-default-role": claims.role,
-          "x-hasura-allowed-roles": [claims.role],
+          "x-hasura-default-role": hasuraRole,
+          "x-hasura-allowed-roles": [hasuraRole],
           "x-hasura-user-id": claims.user,
+          "x-hasura-company-id": claims.companyId,
         },
       }),
     ),
@@ -78,7 +91,11 @@ export function verifyHS256(token: string, secretRaw: string): Claims | null {
     sub: payload.sub,
     iat: payload.iat,
     exp: payload.exp,
-    role: ns["x-hasura-default-role"] ?? "unknown",
+    // app_role is the real app-facing role (e.g. "admin"); ns's default role
+    // may be a translated Hasura-safe name (e.g. "company_admin") — see
+    // HASURA_ROLE above. Older tokens without app_role fall back to ns.
+    role: payload.app_role ?? ns["x-hasura-default-role"] ?? "unknown",
     user: ns["x-hasura-user-id"] ?? payload.sub,
+    companyId: ns["x-hasura-company-id"] ?? "",
   };
 }

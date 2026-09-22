@@ -7,25 +7,31 @@
  * Status vocabulary lives here and in tailwind.config.ts; read it via lib/status.ts.
  */
 :root {
-  --ground: #f6f7f9;
+  --ground: #eef3ec;
   --surface: #ffffff;
-  --ink: #1b2430;
-  --ink-muted: #5b6675;
-  --line: #e2e5ea;
-  --accent: #0b5fa5;
+  --ink: #10261d;
+  --ink-muted: #5c6d61;
+  --line: #dbe6d9;
+  --accent: #123f30;
   --accent-ink: #ffffff;
+  --accent-soft: #e2ebe0;
 
-  --genai: #3b4cc4;
-  --genai-tint: #eef0fb;
+  --genai: #6a5cf0;
+  --genai-tint: #ece9fc;
 
-  --ok-fg: #1b6b3a;
-  --ok-bg: #ddf1e4;
-  --warn-fg: #92600a;
-  --warn-bg: #fbf0da;
-  --bad-fg: #a62121;
-  --bad-bg: #fbe3e1;
-  --dup-fg: #6b3fa0;
-  --dup-bg: #eee7f7;
+  --ok-fg: #146b46;
+  --ok-bg: #dcf0e3;
+  --warn-fg: #9c6a1a;
+  --warn-bg: #f7ecd6;
+  --bad-fg: #b3432a;
+  --bad-bg: #fbe4dc;
+  --dup-fg: #5b4bd6;
+  --dup-bg: #ece9fc;
+
+  /* Auth pages + marketing dark sections — the deep-teal panel. */
+  --panel-navy: #0f3d2e;
+  --panel-navy-line: rgba(255, 255, 255, 0.1);
+  --panel-navy-ink: #b9d6c7;
 }
 
 html,
@@ -59,7 +65,7 @@ body {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #cdd2d9;
+  background: #c3d2c0;
   border-radius: 5px;
   border: 2px solid var(--ground);
 }

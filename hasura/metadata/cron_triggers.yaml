@@ -9,3 +9,15 @@
     timeout_seconds: 120
     tolerance_seconds: 21600
   comment: "Daily 02:00 UTC — mark unpaid past-due invoices overdue and queue alerts"
+
+- name: ml_drift_check_daily
+  webhook: "{{ML_SERVICE_URL}}/drift/check"
+  schedule: "0 3 * * *"
+  include_in_metadata: true
+  payload: {}
+  retry_conf:
+    num_retries: 2
+    retry_interval_seconds: 60
+    timeout_seconds: 300
+    tolerance_seconds: 21600
+  comment: "Daily 03:00 UTC — check both ML models for drift, auto-retrain if drifted"

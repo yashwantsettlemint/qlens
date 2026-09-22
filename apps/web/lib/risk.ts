@@ -11,15 +11,19 @@ export function riskLevel(prob: number): RiskLevel {
   return "high";
 }
 
-export function riskTone(prob: number): StatusView {
-  const level = riskLevel(prob);
-  const map: Record<RiskLevel, Tone> = { low: "ok", medium: "warn", high: "bad" };
-  return { tone: map[level], label: `${Math.round(prob * 100)}%` };
-}
-
 export interface DelayPredictionLike {
   delayProbability: number;
   predictedDelayDays: number;
+}
+
+/** Tone still comes from delayProbability (the model's confidence band); the
+ * visible label leads with the day count, which is what a finance user
+ * actually acts on ("3d late" vs. an abstract "50% chance"). */
+export function riskTone(pred: DelayPredictionLike): StatusView {
+  const level = riskLevel(pred.delayProbability);
+  const map: Record<RiskLevel, Tone> = { low: "ok", medium: "warn", high: "bad" };
+  const days = pred.predictedDelayDays;
+  return { tone: map[level], label: days > 0 ? `${days}d late` : "on time" };
 }
 
 /** One-line, plain-language reading of a delay prediction. */
@@ -29,7 +33,7 @@ export function riskNote(pred: DelayPredictionLike, vendorName?: string): string
     pred.delayProbability >= RISK_THRESHOLDS.amber
       ? `mainly ${vendorName ? `${vendorName}'s` : "the vendor's"} payment history and month-end approval load`
       : "a few days of slack against the payment terms";
-  return `This invoice has a ${chance}% chance of being paid late, about ${pred.predictedDelayDays} day${
+  return `This invoice is predicted to run about ${pred.predictedDelayDays} day${
     pred.predictedDelayDays === 1 ? "" : "s"
-  } past due — ${driver}.`;
+  } past due (${chance}% chance of being paid late) — ${driver}.`;
 }
