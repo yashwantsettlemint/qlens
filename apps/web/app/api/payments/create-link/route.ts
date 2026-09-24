@@ -74,8 +74,9 @@ export async function POST(req: Request) {
       { id: invoiceId },
       { claims: claims ?? undefined },
     );
-  } catch {
-    return fail(502, "Backend is unreachable — is the stack up?");
+  } catch (e) {
+    console.error("payments/create-link invoice lookup failed:", e);
+    return fail(502, "Couldn't load this invoice — please try again.");
   }
   // Hasura's own select permission (filtered by the caller's company) is what
   // actually enforces tenant scoping here now — a cross-tenant id just comes

@@ -28,12 +28,15 @@ export async function POST(req: Request) {
 
   try {
     await hasura(
-      `mutation InsertDemoRequest($o: demo_requests_insert_input!) { insert_demo_requests_one(object: $o) { id } }`,
+      // affected_rows, not insert_..._one { id }: public_lead is insert-only, and
+      // Hasura only exposes *_one / returning fields to roles that can select.
+      `mutation InsertDemoRequest($o: demo_requests_insert_input!) { insert_demo_requests(objects: [$o]) { affected_rows } }`,
       { o: { company_name: companyName, contact_name: contactName, work_email: workEmail, company_size: companySize, message } },
       { claims: PUBLIC_LEAD_CLAIMS },
     );
-  } catch {
-    return fail(502, "Backend is unreachable — is the stack up?");
+  } catch (e) {
+    console.error("demo-request insert failed:", e);
+    return fail(502, "Couldn't save your request — please try again.");
   }
 
   let resp: Response;
