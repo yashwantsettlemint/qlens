@@ -104,7 +104,9 @@ flowchart TD
 **Request flow, in words:**
 
 1. The browser only ever talks to two origins: the Next.js app itself and `auth-service`
-   (login redirects to Keycloak). It never holds the Hasura admin secret.
+   (login redirects to Keycloak). It never holds the Hasura admin secret. (The one
+   remaining server-side use is `apps/web/server/audit.ts`, which writes the append-only
+   `audit_logs` table with it — a known gap, not yet moved to a scoped role.)
 2. Every operation POSTs to
    `/api/graphql`, a Next server route (BFF). It verifies the session JWT, then
    `server/resolvers.ts` runs the operation against Hasura: **reads** with a short-lived
@@ -256,16 +258,21 @@ plain-assertion check script (no framework).
 
 ### auth-service — `:8095` → container `:8005`
 
-Mock login. Issues Hasura-shaped HS256 JWTs signed with `HASURA_GRAPHQL_JWT_SECRET`
-(the same value Hasura verifies against). No real IdP.
+Company / role / invite bookkeeping, plus provisioning the matching Keycloak account.
+**It no longer checks passwords or has a `/login`** — sign-in is Keycloak's hosted page
+(see `apps/web/auth.ts`). Register / invite-accept still return an HS256 Hasura-shaped
+JWT signed with `HASURA_GRAPHQL_JWT_SECRET`.
 
-| Method | Path | Body / header | Returns |
+| Method | Path | Auth | Returns |
 |---|---|---|---|
-| `POST` | `/login` | `{username, password}` | `{access_token, token_type, expires_in, role}` |
-| `POST` | `/refresh` | `Authorization: Bearer <token>` | a fresh token, while the old one is still valid |
-| `GET` | `/me` | `Authorization: Bearer <token>` | decoded claims |
+| `POST` | `/register` | rate-limited 5/min/IP | creates company + admin user (+ Keycloak account), returns a token |
+| `POST` | `/invites/accept` | rate-limited 5/min/IP | creates the invited user (+ Keycloak account), returns a token |
+| `GET` | `/users/lookup?username=` | `X-Internal-Token` | `{company_id, role}` — called by the BFF after Keycloak confirms who signed in |
+| `GET` / `POST` / `PATCH` | `/users`, `/users/{username}` | admin Bearer token | list / create / (de)activate users in the caller's company |
+| `POST` | `/invites` | admin Bearer token | create an invite + email link |
+| `GET` | `/me`, `POST` `/refresh` | Bearer token | decoded claims / a fresh token while the old one is valid |
 
-Dev users (override with `AUTH_USERS` JSON):
+Dev users (seeded in `infra/keycloak/realm-export.json` and the DB migrations):
 
 | Username | Password | Role |
 |---|---|---|
@@ -273,7 +280,6 @@ Dev users (override with `AUTH_USERS` JSON):
 | `priya.nair` | `priya` | `approver` |
 | `rahul.menon` | `rahul` | `approver` |
 | `anjali.rao` | `anjali` | `admin` |
-| `genai-bot` | `genai` | `genai_readonly` |
 
 ### ingestion-service — `:8091` → container `:8001`
 
@@ -608,7 +614,6 @@ digest formatter, and JWT mint/verify/refresh.
 | `SLACK_WEBHOOK_URL` | — | `NOTIFY_CHANNEL=slack` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_STARTTLS` / `SMTP_USER` / `SMTP_PASSWORD` / `EMAIL_FROM` / `EMAIL_TO` | — / `587` / `1` / … | `NOTIFY_CHANNEL=email` (`EMAIL_TO` comma-separated) |
 | `AUTH_TOKEN_TTL_SECONDS` | `3600` | auth-service token lifetime |
-| `AUTH_USERS` | built-in dev list | JSON override of the mock user directory |
 
 ### `apps/web/.env.local`
 
@@ -616,7 +621,7 @@ digest formatter, and JWT mint/verify/refresh.
 |---|---|---|
 | `NEXT_PUBLIC_AUTH_URL` | `http://localhost:8095` | **server-only** despite the name — see the note in the compose table above |
 | `HASURA_ENDPOINT` | `http://localhost:8088/v1/graphql` | server-only (BFF) |
-| `HASURA_ADMIN_SECRET` | `devsecret` | server-only |
+| `HASURA_ADMIN_SECRET` | `devsecret` | server-only; used only by `server/audit.ts` (audit-log writes) and codegen |
 | `GENAI_SERVICE_URL` / `ML_SERVICE_URL` / `NOTIFICATION_SERVICE_URL` | `http://localhost:{8093,8092,8094}` | server-only |
 | `INTERNAL_SERVICE_TOKEN` | must match `infra/.env`'s value | sent as `X-Internal-Token` on every call to ml/genai/notification/ocr-service |
 | `RABBITMQ_URL` | `amqp://guest:guest@localhost:5673/` | note the host-mapped port — `5673`, not RabbitMQ's default `5672` |

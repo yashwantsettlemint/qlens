@@ -8,3 +8,4 @@
 .git
 infra/.env
 **/.env
+**/.env.local

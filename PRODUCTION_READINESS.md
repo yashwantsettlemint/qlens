@@ -52,7 +52,7 @@ guess.
   etc.) when `ENV=production`/`REQUIRE_AUTH=1`. See
   `packages/shared-types/shared_types/secrets_check.py`,
   `apps/web/server/hasura.ts`.
-- **CI dependency scanning**: `pip-audit --strict` and
+- **CI dependency scanning**: `pip-audit --skip-editable` and
   `npm audit --omit=dev --audit-level=high` run on every push.
 - **Hasura prod config**: dev mode / console disabled via
   `infra/k8s/configmap.yaml` (still on in `infra/docker-compose.yml` for

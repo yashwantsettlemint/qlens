@@ -71,7 +71,10 @@ jobs:
       - name: pip-audit (fail on known vulnerabilities)
         run: |
           pip install pip-audit
-          pip-audit --strict
+          # No --strict: it fails on any skipped dep, and this repo's own
+          # editable packages (not on PyPI) are always skipped. Known
+          # vulnerabilities still fail the step.
+          pip-audit --skip-editable
       - name: Run each service's check script
         run: |
           for t in services/*/tests/test_*.py; do
