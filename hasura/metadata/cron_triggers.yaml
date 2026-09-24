@@ -27,3 +27,18 @@
     timeout_seconds: 300
     tolerance_seconds: 21600
   comment: "Daily 03:00 UTC — check both ML models for drift, auto-retrain if drifted"
+
+- name: customer_reminders_daily
+  webhook: "{{NOTIFICATION_SERVICE_URL}}/customer-reminders"
+  schedule: "0 4 * * *"
+  include_in_metadata: true
+  payload: {}
+  headers:
+    - name: X-Internal-Token
+      value_from_env: INTERNAL_SERVICE_TOKEN
+  retry_conf:
+    num_retries: 2
+    retry_interval_seconds: 60
+    timeout_seconds: 300
+    tolerance_seconds: 21600
+  comment: "Daily 04:00 UTC — email customers whose receivable is overdue, again every 2 days until paid"

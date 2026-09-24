@@ -72,3 +72,34 @@ async def mark_overdue(ids: list[str]) -> int:
     if not ids:
         return 0
     return (await _gql(_MARK, {"ids": ids}))["update_invoices"]["affected_rows"]
+
+
+_DUE_REMINDERS = """
+query DueReminders($today: date!, $cutoff: date!) {
+  invoices(where: {
+    direction: {_eq: "receivable"},
+    payment_status: {_in: ["unpaid", "overdue"]},
+    due_date: {_lt: $today},
+    _or: [{last_reminder_on: {_is_null: true}}, {last_reminder_on: {_lte: $cutoff}}]
+  }) {
+    id invoice_number due_date amount tax_amount reminder_count
+    customer { name email }
+  }
+}
+"""
+
+_MARK_REMINDED = """
+mutation MarkReminded($id: uuid!, $today: date!, $n: Int!) {
+  update_invoices(where: {id: {_eq: $id}}, _set: {last_reminder_on: $today, reminder_count: $n}) {
+    affected_rows
+  }
+}
+"""
+
+
+async def find_due_reminders(today: str, cutoff: str) -> list[dict]:
+    return (await _gql(_DUE_REMINDERS, {"today": today, "cutoff": cutoff}))["invoices"]
+
+
+async def mark_reminded(invoice_id: str, today: str, count: int) -> None:
+    await _gql(_MARK_REMINDED, {"id": invoice_id, "today": today, "n": count})

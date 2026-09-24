@@ -151,9 +151,13 @@ select_permissions:
         - invoice_number
         - due_date
         - amount
+        - tax_amount
         - department
         - direction
         - payment_status
+        - collection_status
+        - last_reminder_on
+        - reminder_count
       filter: {}
   - role: genai_writer
     # Cross-tenant like `notifier`, for the same structural reason: /embed's
@@ -227,6 +231,8 @@ update_permissions:
     permission:
       columns:
         - payment_status
+        - last_reminder_on
+        - reminder_count
       filter: {}
       check: {}
   - role: payments_webhook

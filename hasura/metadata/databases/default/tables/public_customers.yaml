@@ -67,6 +67,13 @@ select_permissions:
       columns: "*"
       filter: { company_id: { _eq: X-Hasura-Company-Id } }
       allow_aggregations: true
+  - role: notifier
+    permission:
+      columns:
+        - id
+        - name
+        - email
+      filter: {}
   - role: genai_readonly
     permission:
       columns: "*"

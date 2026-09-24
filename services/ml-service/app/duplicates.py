@@ -61,6 +61,13 @@ def _detect_ml(candidate: dict, existing: list[dict], model) -> DuplicateMatch |
         # half a year apart is just a recurring bill, whatever the model says.
         if f["day_gap"] > MAX_DAY_GAP:
             continue
+        # Strict gate: same party (by caller) and every field identical.
+        if not (
+            f["day_gap"] == 0 and f["amount_exact"] and f["tax_rel_gap"] == 0
+            and f["num_exact"] and f["dept_match"]
+            and (not f["both_have_po"] or f["same_po"])
+        ):
+            continue
         feats_list.append(f)
         rows.append(other)
     if not rows:

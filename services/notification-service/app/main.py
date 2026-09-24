@@ -1,5 +1,6 @@
 """notification-service — target of the `overdue_sweep_daily` Hasura cron trigger.
 
+  POST /customer-reminders -> email customers overdue receivables, every 2 days until paid
   POST /overdue-sweep   -> mark unpaid past-due invoices `overdue`, send a digest
   GET  /health
 """
@@ -10,7 +11,7 @@ import asyncio
 import base64
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -19,7 +20,7 @@ from shared_types.logging import configure_logging
 from shared_types.secrets_check import assert_production_secrets_configured
 
 from . import queue as outbound_queue
-from .hasura import HasuraError, find_past_due, mark_overdue
+from .hasura import HasuraError, find_due_reminders, find_past_due, mark_overdue, mark_reminded
 from .notify import format_digest, get_notifier, send_direct_email
 
 configure_logging("notification-service")
@@ -58,6 +59,47 @@ class DemoRequest(BaseModel):
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+REMINDER_EVERY_DAYS = int(os.getenv("CUSTOMER_REMINDER_EVERY_DAYS", "2"))
+
+
+@app.post("/customer-reminders", dependencies=[Depends(require_internal_token)])
+async def customer_reminders() -> dict:
+    """Email customers about overdue receivables; repeats every
+    REMINDER_EVERY_DAYS until the invoice is paid (paid rows drop out of the query)."""
+    today = date.today()
+    try:
+        rows = await find_due_reminders(
+            today.isoformat(), (today - timedelta(days=REMINDER_EVERY_DAYS)).isoformat()
+        )
+    except HasuraError as exc:
+        raise HTTPException(502, f"Hasura error: {exc}")
+    sent = skipped = 0
+    for r in rows:
+        cust = r.get("customer") or {}
+        if not cust.get("email"):
+            skipped += 1
+            continue
+        days = (today - date.fromisoformat(r["due_date"])).days
+        ok = await asyncio.to_thread(
+            send_direct_email,
+            cust["email"],
+            f"Reminder: invoice {r['invoice_number']} is overdue",
+            (
+                f"Hi {cust.get('name', 'there')},\n\n"
+                f"Invoice {r['invoice_number']} (amount {r['amount']}) was due on "
+                f"{r['due_date']} and is now {days} day(s) overdue. "
+                "Please arrange payment at your earliest convenience. "
+                "If you've already paid, please ignore this message.\n"
+            ),
+        )
+        if not ok:
+            skipped += 1
+            continue
+        await mark_reminded(r["id"], today.isoformat(), (r.get("reminder_count") or 0) + 1)
+        sent += 1
+    return {"eligible": len(rows), "sent": sent, "skipped": skipped}
 
 
 @app.post("/overdue-sweep", dependencies=[Depends(require_internal_token)])
