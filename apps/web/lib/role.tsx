@@ -11,10 +11,12 @@ import {
 } from "react";
 
 /**
- * Session + role. Backed by auth-service (`/login` issues a Hasura-shaped JWT),
- * proxied through this app's own /api/login so the token lives in an httpOnly
- * cookie — page JS never sees it, only {user, role, exp}. `setRole` still lets
- * you preview another role within the session without re-logging-in.
+ * Session + role. Sign-in itself now goes through Keycloak (see ../auth.ts,
+ * ../app/login/page.tsx) — this hook only reads the resulting session back
+ * via /api/session, which still reads the same httpOnly it_session cookie it
+ * always has; page JS never sees the token itself, only {user, role, exp}.
+ * `setRole` still lets you preview another role within the session without
+ * re-authenticating.
  */
 export type Role = "finance_user" | "approver" | "admin" | "genai_readonly";
 
@@ -75,10 +77,6 @@ interface RoleContextValue {
   /** Where this role should land after login (approver has no dashboard). */
   landingPath: string;
   setRole: (r: Role) => void;
-  login: (
-    username: string,
-    password: string,
-  ) => Promise<{ ok: true } | { ok: false; error: string; offline?: boolean }>;
   register: (
     companyName: string,
     username: string,
@@ -112,25 +110,6 @@ export function RoleProvider({ children }: { children: ReactNode }) {
       }
       setReady(true);
     })();
-  }, []);
-
-  const login = useCallback<RoleContextValue["login"]>(async (username, password) => {
-    let res: Response;
-    try {
-      res = await fetch("/api/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-    } catch {
-      return { ok: false, error: "Can't reach the auth service", offline: true };
-    }
-    const data = await res.json();
-    if (!res.ok) {
-      return { ok: false, error: data.error ?? `Auth service error (${res.status})`, offline: data.offline };
-    }
-    setSession({ user: data.user, role: data.role as Role, exp: data.exp });
-    return { ok: true };
   }, []);
 
   const register = useCallback<RoleContextValue["register"]>(async (companyName, username, email, password) => {
@@ -173,7 +152,19 @@ export function RoleProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     setSession(null);
-    fetch("/api/logout", { method: "POST" }).catch(() => {});
+    // Full navigation, not fire-and-forget: ending Keycloak's own SSO
+    // session requires the browser to actually visit Keycloak's logout
+    // endpoint (it clears Keycloak's cookie, then bounces back to /login).
+    // Without this, the next "log in" click silently re-authenticates
+    // whoever Keycloak still remembers instead of prompting fresh.
+    fetch("/api/logout", { method: "POST" })
+      .then((res) => res.json())
+      .then((data) => {
+        window.location.href = data.keycloakLogoutUrl ?? "/login";
+      })
+      .catch(() => {
+        window.location.href = "/login";
+      });
   }, []);
 
   // Silent refresh: swap in a fresh cookie ~5 min before the current one expires.
@@ -213,12 +204,11 @@ export function RoleProvider({ children }: { children: ReactNode }) {
           ? "/dashboard"
           : "/invoices",
       setRole: (r) => session && setSession({ ...session, role: r }),
-      login,
       register,
       acceptInvite,
       logout,
     }),
-    [ready, session, login, register, acceptInvite, logout],
+    [ready, session, register, acceptInvite, logout],
   );
 
   return <RoleContext.Provider value={value}>{children}</RoleContext.Provider>;

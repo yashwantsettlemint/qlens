@@ -96,7 +96,7 @@ _INVOICE_SUMMARY_CTX = """
 query InvoiceSummary($id: uuid!) {
   invoices_by_pk(id: $id) {
     id invoice_number direction amount tax_amount department
-    invoice_date due_date approval_status payment_status description
+    invoice_date due_date approval_status payment_status description extracted_text
     vendor { name }
     customer { name }
     lineItems { description quantity unit_price }

@@ -1,3 +1,26 @@
 table:
   name: demo_requests
   schema: public
+# Marketing-site lead form — pre-tenant, no company_id column, so these grants
+# are unrestricted-to-admins rather than company-scoped.
+insert_permissions:
+  - role: public_lead
+    # The unauthenticated "book a demo" form (apps/web/app/api/demo-request)
+    # — no session, no company. Insert-only, can't read anything back.
+    permission:
+      check: {}
+      columns:
+        - company_name
+        - contact_name
+        - work_email
+        - company_size
+        - message
+select_permissions:
+  - role: company_admin
+    permission:
+      columns: "*"
+      filter: {}
+delete_permissions:
+  - role: company_admin
+    permission:
+      filter: {}

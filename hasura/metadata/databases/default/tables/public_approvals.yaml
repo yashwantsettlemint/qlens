@@ -5,6 +5,40 @@ object_relationships:
   - name: invoice
     using:
       foreign_key_constraint_on: invoice_id
+insert_permissions:
+  - role: finance_user
+    permission:
+      check: {}
+      set:
+        company_id: X-Hasura-Company-Id
+      columns:
+        - invoice_id
+        - approver
+        - level
+        - status
+        - acted_at
+  - role: approver
+    permission:
+      check: {}
+      set:
+        company_id: X-Hasura-Company-Id
+      columns:
+        - invoice_id
+        - approver
+        - level
+        - status
+        - acted_at
+  - role: company_admin
+    permission:
+      check: {}
+      set:
+        company_id: X-Hasura-Company-Id
+      columns:
+        - invoice_id
+        - approver
+        - level
+        - status
+        - acted_at
 select_permissions:
   - role: finance_user
     permission:

@@ -43,7 +43,6 @@ export async function generateAndSendInvoiceImpl(companyId: string, input: any) 
        companies_by_pk(id: $companyId) { ${COMPANY_BILLING_SEL} }
      }`,
     { customerId: input.customerId, companyId },
-    { admin: true },
   );
   const customer = ctx.customers_by_pk;
   if (!customer) throw new Error("Customer not found");
@@ -61,12 +60,13 @@ export async function generateAndSendInvoiceImpl(companyId: string, input: any) 
   const data = await hasura(
     `mutation Create($o: invoices_insert_input!) { insert_invoices_one(object: $o) { ${INVOICE_SEL} } }`,
     {
+      // company_id isn't a field here — the insert permission auto-fills it
+      // from the session.
       o: {
         invoice_number: String(input.invoiceNumber),
         description: input.notes ? String(input.notes).trim() : null,
         direction: "receivable",
         customer_id: input.customerId,
-        company_id: companyId,
         invoice_date: String(input.invoiceDate),
         due_date: String(input.dueDate),
         amount: subtotal,
@@ -79,14 +79,12 @@ export async function generateAndSendInvoiceImpl(companyId: string, input: any) 
         ack_no: input.ackNo ? String(input.ackNo).trim() || null : null,
       },
     },
-    { admin: true },
   );
   const invoiceRow = data.insert_invoices_one;
 
   await hasura(
     `mutation Items($rows: [invoice_line_items_insert_input!]!) { insert_invoice_line_items(objects: $rows) { affected_rows } }`,
-    { rows: lineItems.map((li) => lineItemInsertRow(li, invoiceRow.id, companyId)) },
-    { admin: true },
+    { rows: lineItems.map((li) => lineItemInsertRow(li, invoiceRow.id)) },
   );
 
   // Best-effort: the invoice is created and tracked either way, even if
@@ -163,7 +161,6 @@ export async function resendInvoiceImpl(companyId: string, id: string): Promise<
        companies_by_pk(id: $companyId) { ${COMPANY_BILLING_SEL} }
      }`,
     { id, companyId },
-    { admin: true },
   );
   const invoice = ctx.invoices_by_pk;
   if (!invoice || invoice.company_id !== companyId) throw new Error("Invoice not found");

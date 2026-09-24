@@ -26,3 +26,4 @@ services/ml-service/data/*.csv
 
 # personal scratch notes, not project content
 cred.txt
+services/ml-service/models/*/

@@ -1,6 +1,8 @@
-# The only public entry point — routes to `web` only. Every other service
-# stays ClusterIP-only (see services.yaml), unreachable from outside the
-# cluster regardless of app-level auth.
+# The only public entry point — routes to `web` (and Keycloak, at /auth,
+# since the browser must reach it directly for the OIDC redirect — see
+# apps/web/auth.ts). Every other service stays ClusterIP-only (see
+# services.yaml), unreachable from outside the cluster regardless of
+# app-level auth.
 #
 # Requires ingress-nginx and cert-manager installed on the cluster, and a
 # ClusterIssuer named letsencrypt-prod (cert-manager docs: https://cert-manager.io/docs/configuration/acme/).
@@ -21,6 +23,12 @@ spec:
     - host: your-domain.example
       http:
         paths:
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port: { number: 8080 }
           - path: /
             pathType: Prefix
             backend:

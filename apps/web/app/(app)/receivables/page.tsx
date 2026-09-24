@@ -17,6 +17,8 @@ import { Field, Select, TextInput, DateInput } from "@/components/ui/Field";
 import { pickInvoiceColumns } from "@/components/invoice/columns";
 import { PAGE_SIZE } from "@/lib/constants";
 import { useRole } from "@/lib/role";
+import { toCsv, downloadCsv } from "@/lib/csv";
+import { fmtDate } from "@/lib/format";
 import type { InvoiceRow } from "@/lib/types";
 
 function NewReceivablePanel({
@@ -144,6 +146,7 @@ const COLUMNS = [
   "amount",
   "daysOverdue",
   "collection",
+  "duplicate",
   "risk",
   "payment",
 ];
@@ -225,6 +228,41 @@ function Receivables() {
     await refetch();
   }
 
+  function exportSelected() {
+    const chosen = rows.filter((r) => selected.has(r.id));
+    const csv = toCsv(
+      chosen.map((r) => ({
+        invoiceNumber: r.invoiceNumber,
+        customer: r.customer?.name ?? "",
+        invoiceDate: fmtDate(r.invoiceDate),
+        dueDate: fmtDate(r.dueDate),
+        amount: r.amount,
+        taxAmount: r.taxAmount,
+        total: r.amount + r.taxAmount,
+        daysOverdue: r.daysOverdue,
+        collectionStatus: r.collectionStatus ?? "",
+        paymentStatus: r.paymentStatus,
+        duplicateFlag: r.duplicateFlag && r.duplicateFlag.reviewedStatus !== "false_positive" ? r.duplicateFlag.reviewedStatus : "",
+        delayProbability: r.delayPrediction?.delayProbability ?? "",
+      })),
+      [
+        { key: "invoiceNumber", label: "Invoice #" },
+        { key: "customer", label: "Customer" },
+        { key: "invoiceDate", label: "Invoice date" },
+        { key: "dueDate", label: "Due date" },
+        { key: "amount", label: "Amount" },
+        { key: "taxAmount", label: "Tax" },
+        { key: "total", label: "Total" },
+        { key: "daysOverdue", label: "Days overdue" },
+        { key: "collectionStatus", label: "Collection" },
+        { key: "paymentStatus", label: "Payment" },
+        { key: "duplicateFlag", label: "Duplicate review" },
+        { key: "delayProbability", label: "Delay probability" },
+      ],
+    );
+    downloadCsv(`receivables-${new Date().toISOString().slice(0, 10)}.csv`, csv);
+  }
+
   const activeFilters = ["customer", "collection", "payment", "q"].filter((k) => get(k)).length;
 
   return (
@@ -303,6 +341,7 @@ function Receivables() {
       {selected.size > 0 && (
         <div className="mb-3 flex items-center gap-3 border border-line bg-surface px-4 py-2.5 text-sm">
           <span className="tabular">{selected.size} selected</span>
+          <Button onClick={exportSelected}>Export selected to CSV</Button>
           {can("deleteInvoice") && (
             <Button variant="danger" onClick={deleteSelected} disabled={deleting}>
               Delete selected

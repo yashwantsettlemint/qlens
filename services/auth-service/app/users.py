@@ -1,7 +1,10 @@
 """Companies, users and invites — backed by Postgres (the `companies`,
 `users`, `invites` tables from hasura/migrations/default/1730000000011_multi_tenant).
 
-Passwords are bcrypt-hashed; nothing plaintext is ever stored or logged.
+Credentials and brute-force lockout are owned by Keycloak (app/keycloak_admin.py)
+— this module only tracks company_id/role bookkeeping and provisions the
+matching Keycloak account whenever it creates a user, so the two stores never
+drift apart. No password is ever stored here.
 """
 
 from __future__ import annotations
@@ -10,22 +13,14 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-import bcrypt
 from psycopg.errors import UniqueViolation
 
+from . import keycloak_admin
 from .db import get_conn
 
 _ALLOWED_ROLES = {"finance_user", "approver", "admin"}
 INVITE_TTL_DAYS = 7
 MIN_PASSWORD_LENGTH = 8
-MAX_FAILED_ATTEMPTS = 5
-LOCKOUT_MINUTES = 15
-
-
-class AccountLocked(Exception):
-    """Raised by authenticate() instead of returning None, so /login can
-    tell a locked-out account (fine to reveal, standard UX) apart from a
-    plain wrong password (deliberately not distinguished — see below)."""
 
 
 @dataclass(frozen=True)
@@ -53,62 +48,20 @@ class Invite:
     company_name: str
 
 
-def _hash(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-
-
-def _verify(password: str, password_hash: str) -> bool:
-    try:
-        return bcrypt.checkpw(password.encode(), password_hash.encode())
-    except ValueError:
-        return False
-
-
 def _row_to_user(row: dict) -> User:
     return User(str(row["id"]), str(row["company_id"]), row["username"], row["email"], row["role"])
 
 
-def authenticate(identifier: str, password: str) -> User | None:
-    """Look up by username or email — usernames are only unique per company,
-    so an identifier that collides across two companies resolves to whichever
-    account was created first (ponytail: fine for now, ask for email if a
-    customer ever hits this). A deactivated account fails the same as a wrong
-    password — no separate error, nothing to distinguish for an attacker.
-
-    Failed logins are tracked per-account; MAX_FAILED_ATTEMPTS in a row locks
-    it for LOCKOUT_MINUTES (raises AccountLocked, distinct from a plain wrong
-    password returning None)."""
+def lookup_user(username: str) -> User | None:
+    """By username only — used to attach company_id/role to a session after
+    Keycloak has already verified the person's identity (see apps/web/auth.ts's
+    signIn callback, which calls GET /users/lookup)."""
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM users WHERE (email = %s OR username = %s) AND is_active ORDER BY created_at LIMIT 1",
-            (identifier, identifier),
+            "SELECT * FROM users WHERE username = %s AND is_active LIMIT 1",
+            (username,),
         ).fetchone()
-        if row is None:
-            return None
-
-        locked_until = row["locked_until"]
-        if locked_until is not None and locked_until > datetime.now(timezone.utc):
-            raise AccountLocked()
-
-        if not _verify(password, row["password_hash"]):
-            failed = row["failed_login_count"] + 1
-            new_locked_until = (
-                datetime.now(timezone.utc) + timedelta(minutes=LOCKOUT_MINUTES)
-                if failed >= MAX_FAILED_ATTEMPTS
-                else None
-            )
-            conn.execute(
-                "UPDATE users SET failed_login_count = %s, locked_until = %s WHERE id = %s",
-                (failed, new_locked_until, row["id"]),
-            )
-            return None
-
-        if row["failed_login_count"] or row["locked_until"] is not None:
-            conn.execute(
-                "UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE id = %s",
-                (row["id"],),
-            )
-    return _row_to_user(row)
+    return _row_to_user(row) if row else None
 
 
 def list_users(company_id: str) -> list[dict[str, str | bool]]:
@@ -155,12 +108,20 @@ def create_user(company_id: str, username: str, password: str, role: str, email:
             raise ValueError(f"user '{normalized_username}' already exists")
         try:
             row = conn.execute(
-                """INSERT INTO users (company_id, username, email, password_hash, role)
-                   VALUES (%s, %s, %s, %s, %s) RETURNING *""",
-                (company_id, normalized_username, normalized_email, _hash(password), role),
+                """INSERT INTO users (company_id, username, email, role)
+                   VALUES (%s, %s, %s, %s) RETURNING *""",
+                (company_id, normalized_username, normalized_email, role),
             ).fetchone()
         except UniqueViolation:
             raise ValueError(f"email '{normalized_email}' already has an account") from None
+
+        try:
+            keycloak_admin.create_user(normalized_username, normalized_email, password)
+        except keycloak_admin.KeycloakError:
+            # Keep the two stores in sync — a user that only exists in
+            # Postgres could never actually sign in.
+            conn.execute("DELETE FROM users WHERE id = %s", (row["id"],))
+            raise
     return _row_to_user(row)
 
 

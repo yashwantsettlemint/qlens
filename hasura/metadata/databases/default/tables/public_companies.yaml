@@ -1,8 +1,9 @@
 table:
   name: companies
   schema: public
-# One row per tenant. Read/written through the BFF with the admin secret
-# (register/invite flow goes through auth-service, not Hasura directly).
+# One row per tenant. Register/invite flow goes through auth-service (Keycloak
+# admin API), not Hasura directly — company settings reads/writes go through
+# these role permissions like every other table.
 select_permissions:
   - role: ocr_service
     # Only what fetch_company_settings (name-alias matching for OCR'd vendor
@@ -13,3 +14,48 @@ select_permissions:
         - name
         - aliases
       filter: { id: { _eq: X-Hasura-Company-Id } }
+  - role: finance_user
+    permission:
+      columns: "*"
+      filter: { id: { _eq: X-Hasura-Company-Id } }
+  - role: company_admin
+    permission:
+      columns: "*"
+      filter: { id: { _eq: X-Hasura-Company-Id } }
+update_permissions:
+  - role: finance_user
+    # Signature/logo/tax settings only — renaming the company is company_admin's
+    # call (see updateCompanySettings in resolvers.ts).
+    permission:
+      columns:
+        - signature_data_url
+        - logo_data_url
+        - gstin
+        - pan
+        - address
+        - state
+        - bank_account_name
+        - bank_name
+        - bank_account_number
+        - bank_ifsc
+        - bank_swift
+      filter: { id: { _eq: X-Hasura-Company-Id } }
+      check: {}
+  - role: company_admin
+    permission:
+      columns:
+        - name
+        - aliases
+        - signature_data_url
+        - logo_data_url
+        - gstin
+        - pan
+        - address
+        - state
+        - bank_account_name
+        - bank_name
+        - bank_account_number
+        - bank_ifsc
+        - bank_swift
+      filter: { id: { _eq: X-Hasura-Company-Id } }
+      check: {}

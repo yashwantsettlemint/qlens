@@ -61,14 +61,15 @@ export async function importInvoicesRows(
       return;
     }
     seen.add(key);
-    valid.push({ ...toInsert(input), company_id: companyId });
+    // No company_id field — the insert permission auto-fills it from the
+    // session; companyId here is only the caller's no-session guard.
+    valid.push(toInsert(input));
   });
   let created = 0;
   if (valid.length) {
     const data = await hasura(
       `mutation Import($o: [invoices_insert_input!]!) { insert_invoices(objects: $o) { affected_rows } }`,
       { o: valid },
-      { admin: true },
     );
     created = data.insert_invoices.affected_rows;
   }

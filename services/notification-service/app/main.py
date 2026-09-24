@@ -15,12 +15,15 @@ from datetime import date, datetime, timezone
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 from shared_types.auth import require_internal_token
+from shared_types.logging import configure_logging
+from shared_types.secrets_check import assert_production_secrets_configured
 
 from . import queue as outbound_queue
 from .hasura import HasuraError, find_past_due, mark_overdue
 from .notify import format_digest, get_notifier, send_direct_email
 
-logging.basicConfig(level=logging.INFO)
+configure_logging("notification-service")
+assert_production_secrets_configured("HASURA_GRAPHQL_JWT_SECRET", "INTERNAL_SERVICE_TOKEN")
 app = FastAPI(title="notification-service", version="0.1.0")
 
 

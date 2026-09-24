@@ -180,7 +180,7 @@ def _invoice_facts(inv: dict) -> str:
         "; ".join(f"{x.get('description', '')} x{x.get('quantity', '')}" for x in items if x.get("description"))
         or "none listed"
     )
-    return (
+    facts = (
         f"Invoice {inv.get('invoice_number', '')} ({inv.get('direction', 'payable')}), "
         f"{party_label} {party.get('name', 'unknown')}, department {inv.get('department', '')}, "
         f"₹{float(inv.get('amount') or 0):,.0f} + ₹{float(inv.get('tax_amount') or 0):,.0f} tax, "
@@ -188,6 +188,14 @@ def _invoice_facts(inv: dict) -> str:
         f"status {inv.get('approval_status', '')}/{inv.get('payment_status', '')}. "
         f"Line items: {items_txt}."
     )
+    extracted = (inv.get("extracted_text") or "").strip()
+    if extracted:
+        # The invoice's own OCR'd document text — what it's actually *for*
+        # (product/service descriptions, terms, notes) lives here, not in the
+        # structured columns above. Capped like extract_invoice_fields()'s
+        # own LLM call, same reasoning: bound the prompt, not the document.
+        facts += f"\n\nDocument text:\n{extracted[:12000]}"
+    return facts
 
 
 def summarise_invoice(inv: dict) -> str:
@@ -205,11 +213,13 @@ def summarise_invoice(inv: dict) -> str:
     resp = _client().chat.completions.create(
         model=config.MODEL,
         messages=[
-            {"role": "system", "content": "Write 1-2 plain sentences for a finance user summarising "
-             "what this invoice is for — who it's with, what it's roughly for (infer from department "
-             "and line items if no clearer description), and the amount. Use ONLY the facts given; "
-             "do not invent a product/service if line items say 'none listed'. Amounts are in Indian "
-             "Rupees — use ₹, not $."},
+            {"role": "system", "content": "Write 2-4 plain sentences for a finance user summarising "
+             "what this invoice is for and the amount. If a 'Document text' section is given, that is "
+             "the invoice's own OCR'd text — base what the invoice is actually for on it (products/"
+             "services, terms, notable line items or notes), not on the department field. Only fall "
+             "back to inferring from department/line items when no document text is given, and don't "
+             "invent a product/service if line items say 'none listed' and there's no document text. "
+             "Amounts are in Indian Rupees — use ₹, not $."},
             {"role": "user", "content": facts},
         ],
         temperature=0.2,

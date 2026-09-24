@@ -8,12 +8,16 @@
 from __future__ import annotations
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from shared_types.logging import configure_logging
+from shared_types.secrets_check import assert_production_secrets_configured
 from pydantic import BaseModel
 from shared_types.auth import require_internal_token
 
 from .hasura import HasuraError, fetch_lookups, insert_invoices
 from .validation import parse_csv, validate_row
 
+configure_logging("ingestion-service")
+assert_production_secrets_configured("HASURA_GRAPHQL_JWT_SECRET", "INTERNAL_SERVICE_TOKEN")
 app = FastAPI(title="ingestion-service", version="0.1.0")
 
 

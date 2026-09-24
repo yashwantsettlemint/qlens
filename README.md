@@ -84,7 +84,7 @@ flowchart TD
     UI -- "login / refresh" --> AUTH["auth-service<br/>:8095"]
     UI -- "POST /api/graphql (session JWT)" --> BFF["Next server route<br/>app/api/graphql + server/resolvers.ts"]
 
-    BFF -- "reads: role-scoped JWT<br/>mutations: admin secret (role-gated)" --> HASURA["Hasura GraphQL Engine<br/>:8088"]
+    BFF -- "role-scoped JWT for reads and mutations" --> HASURA["Hasura GraphQL Engine<br/>:8088"]
     BFF -- "ask()" --> GENAI["genai-service :8093<br/>(as genai_readonly)"]
 
     HASURA --> PG[("Postgres :5433<br/>8 tables + vendor_exposure view")]
@@ -104,12 +104,13 @@ flowchart TD
 **Request flow, in words:**
 
 1. The browser only ever talks to two origins: the Next.js app itself and `auth-service`
-   (for login). It never holds the Hasura admin secret.
+   (login redirects to Keycloak). It never holds the Hasura admin secret.
 2. Every operation POSTs to
    `/api/graphql`, a Next server route (BFF). It verifies the session JWT, then
    `server/resolvers.ts` runs the operation against Hasura: **reads** with a short-lived
    JWT re-minted for the signed-in user's role (Hasura's own row/column permissions
-   apply), **mutations** with the admin secret but gated by role in the resolver. The BFF
+   apply), and **mutations** the same way — real per-role Hasura permissions, with a
+   role gate in the resolver on top. The BFF
    also translates camelCase ⇄ snake_case and computes derived fields (`daysOverdue`,
    effective `OVERDUE`, the `*Stats` aggregates).
 4. Hasura is the single writer to Postgres. Two Hasura hooks call `ml-service`
@@ -417,27 +418,35 @@ Permitted for `finance_user` + `admin`. Used by the pre-insert upload flow.
 
 ## Auth & JWTs
 
+- **Login is Keycloak** ([`infra/keycloak/realm-export.json`](infra/keycloak/realm-export.json),
+  [`apps/web/auth.ts`](apps/web/auth.ts)) — clicking "Log in" redirects to Keycloak's own
+  hosted page (Authorization Code + PKCE via NextAuth); this app never sees a password.
+  Once Keycloak confirms who signed in, the BFF looks up that username's company_id/role
+  (still tracked locally — `auth-service`'s `GET /users/lookup`) and mints the same
+  Hasura-shaped session JWT as before, so every resolver/route downstream is unchanged.
+  Register and invite-accept are still this app's own forms (they do provisioning —
+  creating a company, assigning a role — Keycloak's generic self-registration can't do),
+  and both now also create the matching Keycloak account
+  (`services/auth-service/app/keycloak_admin.py`) instead of hashing a password locally.
 - **`auth-service`** signs HS256 tokens carrying the `https://hasura.io/jwt/claims`
   block (`x-hasura-default-role`, `x-hasura-allowed-roles`, `x-hasura-user-id`).
   `iat` is backdated 60 s to absorb clock skew. `POST /refresh` re-issues while a token
-  is still valid; once expired, log in again.
+  is still valid; once expired, sign in again.
 - **The single JWT helper** lives in
   [`packages/shared-types/shared_types/jwt.py`](packages/shared-types/shared_types/jwt.py) —
   used by `auth-service` (issues tokens for humans) and by `genai-service` (self-mints a
   300 s `genai_readonly` token for its own Hasura calls).
-- **`ml-service`** and **`notification-service`** call Hasura as **admin** (an
-  admin-scoped service token, per the brief) with an `x-hasura-role` override where a
-  narrower role is wanted.
-- **`ingestion-service`** calls Hasura with the admin secret plus `x-hasura-role: finance_user`
-  (fine for a trusted in-cluster service; swap for a minted `finance_user` JWT if ever
-  exposed outside the cluster — noted in the code).
+- **`ml-service`**, **`notification-service`** and **`ingestion-service`** each self-mint a
+  short-lived role-scoped JWT (`ml_service`, `notifier`, `finance_user`) — none use the
+  admin secret.
 - **The web BFF** ([`apps/web/server/`](apps/web/server/)) verifies the browser's session
-  JWT against `HASURA_GRAPHQL_JWT_SECRET`, then for **reads** re-mints a short-lived
-  role-scoped token so Hasura's own permissions apply; **mutations** run as admin but are
-  gated by role in the resolver (`requireRole(...)`). `REQUIRE_AUTH=1` rejects
+  JWT against `HASURA_GRAPHQL_JWT_SECRET`, then re-mints a short-lived role-scoped token
+  for every call — reads *and* mutations — so Hasura's own per-role permissions apply
+  throughout; the resolver's `requireRole(...)`/`requireCompanyId()` are a second,
+  BFF-side gate on top, not a substitute for one. `REQUIRE_AUTH=1` rejects
   unauthenticated calls outright; unset keeps the demo permissive — but an
-  unauthenticated read is now still scoped to a single seed demo company via a
-  role-scoped JWT, **never** the raw admin secret, so it can't cross-tenant scan
+  unauthenticated read is still scoped to a single seed demo company via a role-scoped
+  JWT, **never** the raw admin secret, so it can't cross-tenant scan
   (`apps/web/server/hasura.ts`'s `authHeaders()` — this was previously a real
   cross-tenant read leak, fixed and covered by `apps/web/server/hasura.test.ts`).
 - **Audit log** — `audit_logs` (admin-only, no Hasura role permissions) records every
@@ -459,8 +468,8 @@ scores the candidate against each of the same party's other invoices over 13 pai
 features — amount/tax relative gaps and exact-match flags, day gap and same-month,
 five `rapidfuzz` invoice-number similarities, shared/both-have PO, department match —
 built by the **one funnel** `pair_features` (train and serve identical). The highest
-`P(duplicate)` above the pickled threshold (default `0.5`, deliberately low — a missed
-duplicate costs more than a dismissed flag) becomes a `duplicate_flags` row with
+`P(duplicate)` above the pickled threshold (synthetic model 0.75, retrained-from-Hasura model 0.6; a hard 60-day gap
+limit also applies) becomes a `duplicate_flags` row with
 `method="ml"`. Training data is synthetic pairs by default, or human-reviewed
 `duplicate_flags` via `--from-hasura`. No `models/duplicate_model.pkl` → **503**.
 
@@ -618,32 +627,29 @@ digest formatter, and JWT mint/verify/refresh.
 
 ## Not for production
 
-This is a take-home / demo build. Deliberate shortcuts, each with a known ceiling:
+Most of the deliberate shortcuts below have been closed out — see
+[PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) for the current state. What's left:
 
-- **`auth-service` is mock** — a dev-seeded user directory in your own database, not a
-  real IdP (no OAuth/OIDC/SAML/LDAP). Passwords aren't plaintext, though — they're
-  bcrypt-hashed both in the app (`bcrypt.hashpw`/`checkpw` in `app/users.py`) and in the
-  seed data itself. It also has a minimum password length and a login lockout
-  (5 failed attempts → 429 for 15 minutes, migration `1730000000023_auth_lockout`). Only
-  `/login` and the JWT shape are meant to survive swapping in a real IdP.
+- **Real OIDC IdP (Keycloak)** — `auth-service` no longer stores or checks passwords;
+  Keycloak does (see `infra/keycloak/realm-export.json`), and login is a redirect to
+  Keycloak's own hosted page (`apps/web/auth.ts`, NextAuth). `auth-service` keeps
+  company/role bookkeeping and provisions the matching Keycloak account whenever it
+  creates a user (register / invite-accept / admin-created user).
 - **Every backend service self-mints its own scoped Hasura JWT** (`ml_service`,
-  `genai_readonly`/`genai_writer`, `notifier`, `ocr_service`, `finance_user`) — none of
-  ingestion/ml/genai/notification/ocr use the raw admin secret. The **web BFF** still
-  does, for a small set of role-gated mutations whose frontend contract needs a write no
-  real role is granted (`{admin: true}` call sites in `server/resolvers.ts`, each gated
-  by `requireRole`/`requireCompanyId` first) — fine for a trusted in-cluster secret, not
-  for anything that should hand the secret itself to a browser (it never does). An
-  earlier version of this BFF also fell back to the admin secret for *unauthenticated
-  reads*, which bypassed every tenant's row filtering — that's fixed; see
-  [Auth & JWTs](#auth--jwts).
+  `genai_readonly`/`genai_writer`, `notifier`, `ocr_service`, `finance_user`,
+  `payments_webhook`, `public_lead`) — none of ingestion/ml/genai/notification/ocr/web
+  use the raw admin secret anymore. Every table the web BFF writes to now has a real
+  per-role Hasura permission (`company_admin` alongside `finance_user`/`approver`) —
+  the `{admin: true}` bypass in `server/hasura.ts` is gone entirely.
 - **`auth-service`'s CORS denies by default** — `AUTH_CORS_ORIGINS` unset means an
   empty allow-list, not a `"*"` fallback (no cookies cross this boundary either way).
   Set it to your real frontend origin(s) in a real deployment.
 - **`/extract-ocr` handles PDF text layers only** — scanned/image documents return
-  `pending_review`; wiring a vision provider is left as a marked extension point.
+  `pending_review`; wiring a vision provider is left as a marked extension point
+  (the one deliberately deferred item from this pass).
 - **Ports are shifted** off the brief's defaults to avoid clashes on the dev machine
-  (`5433`, `8088`, `8091–8096`, `5673`/`15673` for RabbitMQ, `3002` for the dockerized
+  (`5433`, `8088`, `8091–8097`, `5673`/`15673` for RabbitMQ, `3002` for the dockerized
   frontend); container-internal ports match the brief.
-- **Next.js is on the current major** (`next@16`); `npm audit` may still flag dev/build-time
-  transitive deps against advisory ranges the pinned version's security backports
-  already cover — check the advisory before reaching for `--force`.
+- **Next.js is on the current major** (`next@16`); CI now runs `npm audit --omit=dev`
+  and `pip-audit` on every push (dev/build-time transitive deps are excluded — see the
+  comment in `.github/workflows/ci.yml`).

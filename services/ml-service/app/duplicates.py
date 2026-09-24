@@ -18,6 +18,9 @@ from .dup_features import pair_features
 from .explain import feature_contributions
 
 
+MAX_DAY_GAP = 60
+
+
 @dataclass
 class DuplicateMatch:
     matched_invoice_id: str
@@ -53,6 +56,11 @@ def _detect_ml(candidate: dict, existing: list[dict], model) -> DuplicateMatch |
         if other.get("id") and other["id"] == candidate.get("id"):
             continue
         f = pair_features(candidate, other)
+        # A re-entered invoice lands days apart, not months — the synthetic
+        # training positives top out at 45 days. Same party + similar amount
+        # half a year apart is just a recurring bill, whatever the model says.
+        if f["day_gap"] > MAX_DAY_GAP:
+            continue
         feats_list.append(f)
         rows.append(other)
     if not rows:

@@ -22,6 +22,11 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run test
+      # --omit=dev: dev/build-time tooling (graphql-codegen's lodash, vitest's
+      # esbuild dev server) currently carries advisory-range transitive deps
+      # with no non-breaking fix — never shipped to the running app, so they'd
+      # otherwise fail this gate for reasons unrelated to what actually ships.
+      - run: npm audit --omit=dev --audit-level=high
 
   services:
     runs-on: ubuntu-latest
@@ -63,6 +68,10 @@ jobs:
         run: |
           pip install -e packages/shared-types
           for d in services/*/; do pip install -e "$d"; done
+      - name: pip-audit (fail on known vulnerabilities)
+        run: |
+          pip install pip-audit
+          pip-audit --strict
       - name: Run each service's check script
         run: |
           for t in services/*/tests/test_*.py; do

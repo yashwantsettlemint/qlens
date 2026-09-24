@@ -1,25 +1,24 @@
 /**
- * Server-only Hasura client for the /api/graphql BFF route. The admin secret
- * stays on the server — the browser only ever talks to /api/graphql, which
- * speaks the frontend's own schema (graphql/schema.graphql).
+ * Server-only Hasura client for the /api/graphql BFF route. The browser only
+ * ever talks to /api/graphql, which speaks the frontend's own schema
+ * (graphql/schema.graphql) — Hasura itself is never reachable from it.
  *
- * Auth to Hasura, per request:
- *  - signed-in user  -> a short-lived role-scoped JWT (reads run *as their role*,
- *    so Hasura's own row/column perms apply, not blanket admin).
- *  - no session (demo / offline) -> a role-scoped JWT pinned to the seed demo
- *    company, so an unauthenticated request only ever sees that one tenant's
- *    data instead of bypassing every company_id filter via the admin secret.
- *  - `{ admin: true }` -> force the admin secret. Used by the few mutations whose
- *    frontend contract needs writes a real Hasura role wouldn't be granted
- *    (e.g. approve writes invoices.approval_status directly); the BFF has
- *    already gated those by role (server/auth.ts's requireRole) and by
- *    company (server/auth.ts's requireCompanyId, which throws with no session).
+ * Auth to Hasura, per request, always via a short-lived role-scoped JWT
+ * (never the admin secret — every table now has real per-role permissions):
+ *  - signed-in user, called from a /api/graphql resolver -> JWT carrying
+ *    their real role, read ambiently from requestContext (server/auth.ts).
+ *  - signed-in user, called from a plain API route that verified its own
+ *    cookie (no requestContext) -> pass `{ claims }` explicitly.
+ *  - no session at all (demo/offline, or a route with no user concept —
+ *    public lead form, payment webhook) -> pass a fixed minimal-privilege
+ *    Claims for a dedicated narrow role (see PUBLIC_LEAD_CLAIMS /
+ *    PAYMENTS_WEBHOOK_CLAIMS below), or omit `claims` to fall back to the
+ *    demo-company finance_user JWT.
  */
 import { currentClaims } from "./auth";
 import { signHS256, type Claims } from "./jwt";
 
 const ENDPOINT = process.env.HASURA_ENDPOINT ?? "http://localhost:8088/v1/graphql";
-const ADMIN_SECRET = process.env.HASURA_ADMIN_SECRET ?? "devsecret";
 const JWT_SECRET = process.env.HASURA_GRAPHQL_JWT_SECRET ?? "";
 
 // Same seed tenant apps/web/app/api/{bulk-upload,ocr}/route.ts fall back to
@@ -27,6 +26,15 @@ const JWT_SECRET = process.env.HASURA_GRAPHQL_JWT_SECRET ?? "";
 // reaching every tenant's data.
 const DEMO_COMPANY_ID = "00000000-0000-0000-0000-000000000001";
 const DEMO_CLAIMS: Claims = { sub: "demo", iat: 0, exp: 0, role: "finance_user", user: "demo", companyId: DEMO_COMPANY_ID };
+
+/** Anonymous "book a demo" form — insert-only, no company, no user. */
+export const PUBLIC_LEAD_CLAIMS: Claims = {
+  sub: "public-lead-form", iat: 0, exp: 0, role: "public_lead", user: "public-lead-form", companyId: DEMO_COMPANY_ID,
+};
+/** Razorpay webhook — no session; company_id is resolved per-call from the invoice. */
+export const PAYMENTS_WEBHOOK_CLAIMS: Claims = {
+  sub: "payments-webhook", iat: 0, exp: 0, role: "payments_webhook", user: "payments-webhook", companyId: DEMO_COMPANY_ID,
+};
 
 // Checked lazily (at first real request), not at module load — `next build`
 // imports every route module to statically analyze it, with NODE_ENV forced
@@ -43,30 +51,29 @@ const DEMO_CLAIMS: Claims = { sub: "demo", iat: 0, exp: 0, role: "finance_user",
 function assertProductionSecretsConfigured(): void {
   if (process.env.NODE_ENV !== "production") return;
   if (!/^(1|true|yes)$/i.test(process.env.REQUIRE_AUTH ?? "")) return;
-  if (!process.env.HASURA_ADMIN_SECRET || process.env.HASURA_ADMIN_SECRET === "devsecret") {
-    throw new Error("HASURA_ADMIN_SECRET must be set to a real secret in production");
+  if (!process.env.HASURA_GRAPHQL_JWT_SECRET || process.env.HASURA_GRAPHQL_JWT_SECRET.includes("dev-jwt-signing-key")) {
+    throw new Error("HASURA_GRAPHQL_JWT_SECRET must be set to a real secret in production");
   }
   if (!process.env.INTERNAL_SERVICE_TOKEN) {
     throw new Error("INTERNAL_SERVICE_TOKEN must be set in production");
   }
 }
 
-function authHeaders(admin: boolean): Record<string, string> {
-  if (admin) return { "x-hasura-admin-secret": ADMIN_SECRET };
+function authHeaders(explicitClaims?: Claims): Record<string, string> {
   if (!JWT_SECRET) throw new Error("HASURA_GRAPHQL_JWT_SECRET is not set");
-  const claims = currentClaims() ?? DEMO_CLAIMS;
+  const claims = explicitClaims ?? currentClaims() ?? DEMO_CLAIMS;
   return { authorization: `Bearer ${signHS256(claims, JWT_SECRET)}` };
 }
 
 export async function hasura<T = any>(
   query: string,
   variables?: Record<string, unknown>,
-  opts: { admin?: boolean } = {},
+  opts: { claims?: Claims } = {},
 ): Promise<T> {
   assertProductionSecretsConfigured();
   const res = await fetch(ENDPOINT, {
     method: "POST",
-    headers: { "content-type": "application/json", ...authHeaders(opts.admin ?? false) },
+    headers: { "content-type": "application/json", ...authHeaders(opts.claims) },
     body: JSON.stringify({ query, variables }),
     cache: "no-store",
   });

@@ -26,7 +26,21 @@ data:
   # web BFF
   REQUIRE_AUTH: "1"
   NEXT_PUBLIC_AUTH_URL: "http://auth-service:8005"
+  # Browser-facing URL for invite-accept links (services/auth-service/app/email.py)
+  WEB_URL: "https://your-domain.example"
 
   # Set to your real origin(s) once you have a domain — empty denies all
   # cross-origin browser calls to auth-service.
   AUTH_CORS_ORIGINS: "https://your-domain.example"
+
+  # Keycloak (real OIDC IdP — see infra/k8s/keycloak.yaml). A single public
+  # hostname behind Ingress reaches both the browser and every backend
+  # container, so — unlike the docker-compose dev setup — there's no need to
+  # split public vs internal issuer URLs here.
+  KEYCLOAK_URL: "http://keycloak:8080"
+  KEYCLOAK_REALM: "invoice-tracker"
+  KEYCLOAK_ADMIN_CLIENT_ID: "auth-service-admin"
+  AUTH_KEYCLOAK_ID: "web-bff"
+  AUTH_KEYCLOAK_ISSUER: "https://your-domain.example/auth/realms/invoice-tracker"
+  KEYCLOAK_INTERNAL_ISSUER: "https://your-domain.example/auth/realms/invoice-tracker"
+  AUTH_TRUST_HOST: "true"

@@ -72,11 +72,14 @@ export async function POST(req: Request) {
          }
        }`,
       { id: invoiceId },
-      { admin: true },
+      { claims: claims ?? undefined },
     );
   } catch {
     return fail(502, "Backend is unreachable — is the stack up?");
   }
+  // Hasura's own select permission (filtered by the caller's company) is what
+  // actually enforces tenant scoping here now — a cross-tenant id just comes
+  // back null, same as "not found".
   const inv = data.invoices_by_pk;
   if (!inv) return fail(404, "Invoice not found.");
   if (inv.direction === "receivable") {

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from shared_types.logging import configure_logging
+from shared_types.secrets_check import assert_production_secrets_configured
 from pydantic import BaseModel
 from shared_types.auth import require_internal_token
 
@@ -31,6 +33,8 @@ from .hasura import (
 )
 from .whitelist import NotAllowed
 
+configure_logging("genai-service")
+assert_production_secrets_configured("HASURA_GRAPHQL_JWT_SECRET", "INTERNAL_SERVICE_TOKEN")
 app = FastAPI(title="genai-service", version="0.2.0")
 
 

@@ -27,10 +27,18 @@ export const InvoiceRowFields = graphql(`
     duplicateFlag {
       reviewedStatus
       confidenceScore
+      matchedInvoice {
+        id
+        invoiceNumber
+      }
     }
     delayPrediction {
       delayProbability
       predictedDelayDays
+    }
+    payments {
+      paidAt
+      amountPaid
     }
   }
 `);

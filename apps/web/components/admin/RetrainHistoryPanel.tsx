@@ -26,6 +26,10 @@ export function RetrainHistoryPanel() {
   });
   const [retrain, { loading: retraining }] = useMutation(TriggerModelRetrainMutation, {
     onCompleted: () => refetch(),
+    // ModelStatusPanel (the version/rows/metrics cards) has its own separate
+    // query and no other way to know a retrain just happened — without this,
+    // it keeps showing the pre-retrain model until a hard page reload.
+    refetchQueries: ["MlModelStatus"],
   });
 
   if (loading && !data) return null;

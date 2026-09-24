@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { hasura } from "@/server/hasura";
+import { hasura, PAYMENTS_WEBHOOK_CLAIMS } from "@/server/hasura";
 
 /**
  * Razorpay webhook — confirms a Payment Link was paid and marks the invoice
@@ -43,7 +43,7 @@ export async function POST(req: Request) {
   const owner = await hasura<{ invoices_by_pk: { company_id: string } | null }>(
     `query PayCompany($id: uuid!) { invoices_by_pk(id: $id) { company_id } }`,
     { id: invoiceId },
-    { admin: true },
+    { claims: PAYMENTS_WEBHOOK_CLAIMS },
   );
   const companyId = owner.invoices_by_pk?.company_id;
   if (!companyId) return Response.json({ ok: true });
@@ -61,7 +61,7 @@ export async function POST(req: Request) {
       id: invoiceId,
       companyId,
     },
-    { admin: true },
+    { claims: PAYMENTS_WEBHOOK_CLAIMS },
   );
 
   return Response.json({ ok: true });

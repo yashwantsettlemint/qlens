@@ -1,0 +1,104 @@
+{
+  "realm": "invoice-tracker",
+  "enabled": true,
+  "bruteForceProtected": true,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 900,
+  "maxFailureWaitSeconds": 900,
+  "registrationAllowed": false,
+  "sslRequired": "external",
+  "roles": {
+    "realm": [
+      { "name": "finance_user", "description": "Invoice entry, payments, imports" },
+      { "name": "approver", "description": "Approve / reject invoices only" },
+      { "name": "company_admin", "description": "Full access + user management (app role \"admin\")" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "web-bff",
+      "name": "Invoice Tracker web BFF",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "secret": "dev-keycloak-web-bff-secret-change-me",
+      "redirectUris": [
+        "http://localhost:3002/api/auth/callback/keycloak",
+        "http://localhost:3002/login"
+      ],
+      "webOrigins": ["http://localhost:3002"],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:3002/login"
+      }
+    },
+    {
+      "clientId": "auth-service-admin",
+      "name": "auth-service Keycloak admin API client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "dev-keycloak-auth-service-secret-change-me",
+      "fullScopeAllowed": true
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-auth-service-admin",
+      "enabled": true,
+      "serviceAccountClientId": "auth-service-admin",
+      "clientRoles": {
+        "realm-management": ["manage-users"]
+      }
+    },
+    {
+      "username": "kavya",
+      "email": "kavya@acme-traders.example",
+      "firstName": "Kavya",
+      "lastName": "Iyer",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "kavya", "temporary": false }],
+      "realmRoles": ["finance_user"]
+    },
+    {
+      "username": "priya.nair",
+      "email": "priya.nair@acme-traders.example",
+      "firstName": "Priya",
+      "lastName": "Nair",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "priya", "temporary": false }],
+      "realmRoles": ["approver"]
+    },
+    {
+      "username": "rahul.menon",
+      "email": "rahul.menon@acme-traders.example",
+      "firstName": "Rahul",
+      "lastName": "Menon",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "rahul", "temporary": false }],
+      "realmRoles": ["approver"]
+    },
+    {
+      "username": "anjali.rao",
+      "email": "anjali.rao@acme-traders.example",
+      "firstName": "Anjali",
+      "lastName": "Rao",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "anjali", "temporary": false }],
+      "realmRoles": ["company_admin"]
+    }
+  ]
+}

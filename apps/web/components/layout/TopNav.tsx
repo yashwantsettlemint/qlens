@@ -19,6 +19,7 @@ const NAV: {
   { href: "/receivables", label: "Receivables" },
   { href: "/vendors", label: "Vendors" },
   { href: "/customers", label: "Customers" },
+  { href: "/vendor-history", label: "Vendor history", cap: "viewDashboard" },
   { href: "/forecast", label: "Forecast", cap: "viewDashboard" },
   { href: "/upload", label: "Upload", cap: "addInvoices" },
   { href: "/users", label: "Users", cap: "manageUsers" },

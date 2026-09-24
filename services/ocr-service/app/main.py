@@ -20,10 +20,14 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from shared_types.logging import configure_logging
+from shared_types.secrets_check import assert_production_secrets_configured
 from shared_types.auth import require_internal_token
 
 from . import bulk, config, ocr_engine, pipeline
 
+configure_logging("ocr-service")
+assert_production_secrets_configured("HASURA_GRAPHQL_JWT_SECRET", "INTERNAL_SERVICE_TOKEN")
 app = FastAPI(title="ocr-service", version="0.1.0")
 
 

@@ -4,10 +4,12 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 // back to the raw Hasura admin secret whenever there was no session, which
 // bypasses every company_id permission filter and returns every tenant's
 // data. It must now mint a role-scoped JWT instead, even with no session.
+// The admin secret has since been removed from hasura() entirely (every
+// table now has real per-role permissions) — these tests confirm it's never
+// sent, not just that it's conditional.
 
 // HASURA_GRAPHQL_JWT_SECRET is set in vitest.config.ts's test.env (needed to
-// mint/verify tokens); HASURA_ADMIN_SECRET falls back to hasura.ts's own
-// "devsecret" default, same as an unconfigured dev environment.
+// mint/verify tokens).
 
 vi.mock("./auth", () => ({ currentClaims: vi.fn(() => null) }));
 
@@ -61,12 +63,5 @@ describe("hasura() tenant scoping", () => {
     const token = captured.headers!.authorization.replace("Bearer ", "");
     const claims = verifyHS256(token, process.env.HASURA_GRAPHQL_JWT_SECRET!);
     expect(claims?.companyId).toBe("tenant-a-company-id");
-  });
-
-  it("only sends the admin secret when the caller explicitly asks for { admin: true }", async () => {
-    const captured = mockFetchCapturingHeaders();
-    await hasura("mutation { __typename }", undefined, { admin: true });
-    expect(captured.headers?.["x-hasura-admin-secret"]).toBe("devsecret");
-    expect(captured.headers?.authorization).toBeUndefined();
   });
 });

@@ -10,6 +10,7 @@ import {
   InvoicesQuery,
   InflowStatsQuery,
   DemoRequestsQuery,
+  CashForecastQuery,
 } from "@/graphql/operations/queries";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatStrip, Stat } from "@/components/ui/StatStrip";
@@ -48,6 +49,7 @@ function Dashboard() {
   const stats = useQuery(DashboardStatsQuery, { variables: { vendorId } });
   const inflow = useQuery(InflowStatsQuery, { variables: {} });
   const exposure = useQuery(VendorExposureQuery, { variables: {} });
+  const forecast = useQuery(CashForecastQuery);
   const pending = useQuery(InvoicesQuery, {
     variables: {
       filter: { approvalStatus: "PENDING", vendorId },
@@ -112,6 +114,109 @@ function Dashboard() {
           </>
         }
       />
+
+      {s && (
+        <div className="mb-6 rounded-xl bg-accent p-6 text-surface">
+          <StatStrip cols={3}>
+            <div>
+              <div className="text-sm opacity-70">Owed to you</div>
+              <div className="tabular mt-1.5 text-3xl font-semibold tracking-tight">
+                {inrCompact(inflow.data?.inflowStats.outstandingAmount ?? 0)}
+              </div>
+              <div className="mt-1 text-xs opacity-70">
+                {inflow.data?.inflowStats.outstandingCount ?? 0} open invoices
+              </div>
+            </div>
+            <div>
+              <div className="text-sm opacity-70">You owe</div>
+              <div className="tabular mt-1.5 text-3xl font-semibold tracking-tight">
+                {inrCompact(s.vendorExposureTotal)}
+              </div>
+              <div className="mt-1 text-xs opacity-70">Unpaid across vendors, incl. tax</div>
+            </div>
+            <div>
+              <div className="text-sm opacity-70">Net position</div>
+              <div className="tabular mt-1.5 text-3xl font-semibold tracking-tight">
+                {forecast.data ? `${forecast.data.cashForecast.netTotal >= 0 ? "+" : ""}${inrCompact(forecast.data.cashForecast.netTotal)}` : "—"}
+              </div>
+              <div className="mt-1 text-xs opacity-70">
+                <Link href="/forecast" className="underline hover:no-underline">
+                  See forecast →
+                </Link>
+              </div>
+            </div>
+          </StatStrip>
+        </div>
+      )}
+
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Panel title="Payables — money out" actions={<Link href="/invoices" className="text-xs font-semibold text-accent hover:underline">Vendor bills →</Link>}>
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <div className="text-xs text-ink-muted">Awaiting approval</div>
+              <div className="tabular mt-1 text-lg">{s?.pendingCount ?? 0}</div>
+              <div className="text-xs text-ink-muted">{inr(s?.pendingAmount ?? 0)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-ink-muted">Overdue to vendors</div>
+              <div className="tabular mt-1 text-lg text-bad-fg">{inrCompact(s?.overdueAmount ?? 0)}</div>
+              <div className="text-xs text-ink-muted">{s?.overdueCount ?? 0} bills past due</div>
+            </div>
+          </div>
+        </Panel>
+        <Panel title="Receivables — money in" actions={<Link href="/receivables" className="text-xs font-semibold text-accent hover:underline">Receivables →</Link>}>
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <div className="text-xs text-ink-muted">Overdue from customers</div>
+              <div className="tabular mt-1 text-lg text-bad-fg">
+                {inrCompact(inflow.data?.inflowStats.overdueAmount ?? 0)}
+              </div>
+              <div className="text-xs text-ink-muted">{inflow.data?.inflowStats.overdueCount ?? 0} invoices past due</div>
+            </div>
+            <div>
+              <div className="text-xs text-ink-muted">Collected, last 30 days</div>
+              <div className="tabular mt-1 text-lg text-ok-fg">
+                {inrCompact(inflow.data?.inflowStats.settledLast30Amount ?? 0)}
+              </div>
+              <div className="text-xs text-ink-muted">{inflow.data?.inflowStats.settledLast30Count ?? 0} settled</div>
+            </div>
+          </div>
+        </Panel>
+      </div>
+
+      {(() => {
+        const topVendor = [...(exposure.data?.vendorExposure ?? [])].sort((a, b) => b.outstanding - a.outstanding)[0];
+        const totalVendorExposure = (exposure.data?.vendorExposure ?? []).reduce((sum, v) => sum + v.outstanding, 0);
+        const noMoneySoon =
+          forecast.data && forecast.data.cashForecast.buckets.slice(0, 2).every((b) => b.inflow === 0);
+        const items: string[] = [];
+        if (topVendor && totalVendorExposure > 0) {
+          const share = Math.round((topVendor.outstanding / totalVendorExposure) * 100);
+          if (share >= 40) {
+            items.push(
+              `${topVendor.vendorName} holds ${inrCompact(topVendor.outstanding)} — ${share}% of everything you owe.`,
+            );
+          }
+        }
+        if (noMoneySoon) {
+          items.push("No money is expected in the next few days — check the forecast for when it lands.");
+        }
+        if ((s?.overdueCount ?? 0) > 0) {
+          items.push(`${s?.overdueCount} bill${s?.overdueCount === 1 ? "" : "s"} overdue to vendors — record payments as they clear.`);
+        }
+        return items.length > 0 ? (
+          <Panel title="Needs your attention" className="mb-6">
+            <ul className="space-y-2">
+              {items.map((text, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm text-ink">
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-bad-fg" />
+                  {text}
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        ) : null;
+      })()}
 
       <QueryState loading={stats.loading && !s} error={stats.error} minRows={1}>
         {s && (

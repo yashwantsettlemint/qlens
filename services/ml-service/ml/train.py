@@ -51,14 +51,16 @@ def _rows_to_matrix(df: pd.DataFrame) -> np.ndarray:
 async def _load_from_hasura(company_id: str) -> pd.DataFrame:
     from app.hasura import _gql  # reuse the admin client
 
-    # Both directions: a payable's party history is its vendor's, a
-    # receivable's is its customer's. Same feature funnel for both. Only the
-    # outer filter needs company_id — a vendor/customer row (and so all of
+    # Receivables only: delay prediction answers "will this customer pay us
+    # late?" — when we pay a vendor is our own call, so payables aren't scored
+    # (see server/resolvers.ts cashForecast) and would only teach the model
+    # our own payment habits. A receivable's party history is its customer's.
+    # Only the outer filter needs company_id — a customer row (and so all of
     # its own invoices, via the nested relationship below) already belongs
     # to exactly one company.
     query = """
     query Paid($companyId: uuid!) {
-      invoices(where: {payment_status: {_eq: "paid"}, company_id: {_eq: $companyId}}) {
+      invoices(where: {payment_status: {_eq: "paid"}, direction: {_eq: "receivable"}, company_id: {_eq: $companyId}}) {
         id amount tax_amount department po_id invoice_date due_date
         approvals_aggregate { aggregate { count } }
         payments(order_by: {paid_at: asc}, limit: 1) { paid_at }
@@ -121,7 +123,7 @@ async def _load_from_hasura(company_id: str) -> pd.DataFrame:
         )
     if len(records) < 50:
         raise SystemExit(
-            f"only {len(records)} paid invoices in Hasura — too few to train. "
+            f"only {len(records)} paid receivables in Hasura — too few to train. "
             "Run without --from-hasura to use synthetic data."
         )
     return pd.DataFrame.from_records(records)

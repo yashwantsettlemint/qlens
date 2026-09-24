@@ -16,6 +16,40 @@ array_relationships:
         table:
           name: purchase_orders
           schema: public
+insert_permissions:
+  - role: finance_user
+    permission:
+      check: {}
+      set:
+        company_id: X-Hasura-Company-Id
+      columns:
+        - name
+        - tax_id
+        - payment_terms_days
+        - email
+  - role: company_admin
+    permission:
+      check: {}
+      set:
+        company_id: X-Hasura-Company-Id
+      columns:
+        - name
+        - tax_id
+        - payment_terms_days
+        - email
+update_permissions:
+  - role: finance_user
+    permission:
+      columns:
+        - email
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      check: {}
+  - role: company_admin
+    permission:
+      columns:
+        - email
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      check: {}
 select_permissions:
   - role: finance_user
     permission:

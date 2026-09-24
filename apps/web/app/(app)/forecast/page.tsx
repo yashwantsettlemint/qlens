@@ -9,7 +9,9 @@ import { Money } from "@/components/ui/Money";
 import { ForecastChart } from "@/components/ForecastChart";
 import { DelayRiskChart } from "@/components/DelayRiskChart";
 import { CustomerExposureDelayChart } from "@/components/CustomerExposureDelayChart";
+import { StatStrip, Stat } from "@/components/ui/StatStrip";
 import { inrCompact } from "@/lib/format";
+import { riskLevel } from "@/lib/risk";
 import type { InvoiceRow } from "@/lib/types";
 
 export default function ForecastPage() {
@@ -52,8 +54,29 @@ export default function ForecastPage() {
       <QueryState loading={loading && !f} error={error} minRows={4}>
         {f && (
           <>
+            {(() => {
+              const expectedIn = buckets.reduce((s, b) => s + b.inflow, 0);
+              const expectedOut = buckets.reduce((s, b) => s + b.outflow, 0);
+              const highRiskAmount = openInvoices
+                .filter((i) => i.delayPrediction && riskLevel(i.delayPrediction.delayProbability) === "high")
+                .reduce((s, i) => s + i.amount + i.taxAmount, 0);
+              return (
+                <StatStrip cols={4}>
+                  <Stat label="Expected in" rule="ok" value={inrCompact(expectedIn)} hint={`${openInvoices.length} invoices`} />
+                  <Stat label="Expected out" value={inrCompact(expectedOut)} hint={expectedOut === 0 ? "No vendor bills scheduled" : undefined} />
+                  <Stat label="Net over window" rule={f.netTotal >= 0 ? "ok" : "bad"} value={`${f.netTotal >= 0 ? "+" : ""}${inrCompact(f.netTotal)}`} />
+                  <Stat
+                    label="In high-risk invoices"
+                    rule={highRiskAmount > 0 ? "bad" : "neutral"}
+                    value={inrCompact(highRiskAmount)}
+                    hint={expectedIn > 0 ? `${Math.round((highRiskAmount / expectedIn) * 100)}% of expected inflow` : undefined}
+                  />
+                </StatStrip>
+              );
+            })()}
+
             <Panel
-              className="mb-6"
+              className="mb-6 mt-6"
               title={`Net position over the forecast window: ${inrCompact(f.netTotal)}`}
             >
               <ForecastChart buckets={buckets} />

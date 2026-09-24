@@ -1,14 +1,22 @@
-"""auth-service — DB-backed accounts, issues Hasura-shaped JWTs.
+"""auth-service — Postgres-backed company/role bookkeeping + a thin Keycloak
+admin-API proxy for provisioning, issuing Hasura-shaped JWTs.
 
   POST /register         {company_name, username, email, password} -> TokenResponse (new company + admin)
-  POST /login            {username, password}     -> TokenResponse
   POST /refresh          Authorization: Bearer ..  -> a fresh token (while the old one is still valid)
   GET  /me               Authorization: Bearer ..  -> decoded claims
   GET  /users            Authorization: Bearer ..  -> this admin's company's users
   POST /users            Authorization: Bearer ..  -> create a user directly, in this admin's company
   POST /invites          Authorization: Bearer ..  -> invite a teammate by email (admin only)
   POST /invites/accept   {token, username, password} -> TokenResponse (joins the inviting company)
+  GET  /users/lookup     X-Internal-Token          -> {company_id, role} for a Keycloak-verified username
   GET  /health
+
+Sign-in itself is Keycloak's job now (apps/web/auth.ts redirects there) —
+this service no longer checks a password anywhere. Every route above that
+creates an account (register / create_user / accept_invite) also provisions
+the matching Keycloak account (see app/keycloak_admin.py), and /users/lookup
+is how the BFF turns "Keycloak says this is user X" into this app's
+company_id/role for that user.
 
 The token carries the `https://hasura.io/jwt/claims` block Hasura expects
 (now including `x-hasura-company-id`); send it as `Authorization: Bearer
@@ -19,22 +27,26 @@ from __future__ import annotations
 
 import os
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from shared_types.auth import require_internal_token
+from shared_types.logging import configure_logging
+from shared_types.secrets_check import assert_production_secrets_configured
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from shared_types.jwt import decode_hasura_jwt, mint_hasura_jwt
 
 from .email import send_invite_email
 from .users import (
-    LOCKOUT_MINUTES,
-    AccountLocked,
     User,
     accept_invite,
-    authenticate,
     create_invite,
     create_user,
     list_users,
+    lookup_user,
     register_company,
     set_user_active,
 )
@@ -50,8 +62,13 @@ TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", "3600"))
 # Hasura role (see hasura/metadata) scoped by company_id like any other.
 _HASURA_ROLE = {"admin": "company_admin"}
 
-app = FastAPI(title="auth-service", version="0.2.0")
-# Called from the browser (login page). Deny-by-default: an unset
+configure_logging("auth-service")
+assert_production_secrets_configured(
+    "HASURA_GRAPHQL_JWT_SECRET", "INTERNAL_SERVICE_TOKEN", "KEYCLOAK_ADMIN_CLIENT_SECRET",
+)
+app = FastAPI(title="auth-service", version="0.3.0")
+# Called from the browser (register / invite-accept pages — login itself is a
+# redirect to Keycloak now, not a call here). Deny-by-default: an unset
 # AUTH_CORS_ORIGINS in prod fails closed instead of falling back to "*".
 _cors_origins = [o for o in os.getenv("AUTH_CORS_ORIGINS", "").split(",") if o]
 app.add_middleware(
@@ -61,10 +78,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-class LoginRequest(BaseModel):
-    username: str
-    password: str
+# Keycloak has its own brute-force protection on the credentials themselves
+# (see infra/keycloak/realm-export.json's bruteForceProtected) — this limiter
+# instead caps the account-creation endpoints, which have no such built-in
+# protection of their own.
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 class RegisterRequest(BaseModel):
@@ -133,7 +153,8 @@ def health() -> dict:
 
 
 @app.post("/register", response_model=TokenResponse)
-def register(req: RegisterRequest) -> TokenResponse:
+@limiter.limit("5/minute")
+def register(request: Request, req: RegisterRequest) -> TokenResponse:
     try:
         _company, user = register_company(req.company_name, req.username, req.password, req.email)
     except ValueError as exc:
@@ -141,15 +162,12 @@ def register(req: RegisterRequest) -> TokenResponse:
     return _mint(user)
 
 
-@app.post("/login", response_model=TokenResponse)
-def login(req: LoginRequest) -> TokenResponse:
-    try:
-        user = authenticate(req.username, req.password)
-    except AccountLocked:
-        raise HTTPException(429, f"too many failed attempts — try again in {LOCKOUT_MINUTES} minutes")
+@app.get("/users/lookup")
+def users_lookup(username: str, _: None = Depends(require_internal_token)) -> dict:
+    user = lookup_user(username)
     if user is None:
-        raise HTTPException(401, "invalid username or password")
-    return _mint(user)
+        raise HTTPException(404, "unknown user")
+    return {"company_id": user.company_id, "role": user.role}
 
 
 @app.get("/users")
@@ -197,7 +215,8 @@ def create_invite_route(req: InviteRequest, authorization: str = Header(default=
 
 
 @app.post("/invites/accept", response_model=TokenResponse)
-def accept_invite_route(req: AcceptInviteRequest) -> TokenResponse:
+@limiter.limit("5/minute")
+def accept_invite_route(request: Request, req: AcceptInviteRequest) -> TokenResponse:
     try:
         user = accept_invite(req.token, req.username, req.password)
     except ValueError as exc:

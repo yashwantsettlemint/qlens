@@ -1,4 +1,4 @@
-import { hasura, NOTIFICATION_URL, internalServiceHeaders } from "@/server/hasura";
+import { hasura, NOTIFICATION_URL, internalServiceHeaders, PUBLIC_LEAD_CLAIMS } from "@/server/hasura";
 
 /**
  * Public lead-gen form on the landing page's "Book a demo" — no session, no
@@ -30,7 +30,7 @@ export async function POST(req: Request) {
     await hasura(
       `mutation InsertDemoRequest($o: demo_requests_insert_input!) { insert_demo_requests_one(object: $o) { id } }`,
       { o: { company_name: companyName, contact_name: contactName, work_email: workEmail, company_size: companySize, message } },
-      { admin: true },
+      { claims: PUBLIC_LEAD_CLAIMS },
     );
   } catch {
     return fail(502, "Backend is unreachable — is the stack up?");

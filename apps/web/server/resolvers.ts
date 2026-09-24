@@ -21,8 +21,9 @@ import { toInsert, importInvoicesRows } from "./csvImport";
 import { generateAndSendInvoiceImpl, resendInvoiceImpl } from "./invoiceSend";
 import { attachPredictions } from "./predictions";
 
-/** myCompanyId(), or throw — for the {admin:true} mutations below, which
- * bypass Hasura's own company_id filtering and so must scope themselves. */
+/** myCompanyId(), or throw — every mutation below still scopes its own
+ * queries by company_id explicitly, on top of Hasura's row-level filter,
+ * as defense in depth. */
 function requireCompanyId(): string {
   const id = myCompanyId();
   if (!id) throw new Error("No company on this session — sign in again.");
@@ -53,7 +54,6 @@ async function setPartyEmail(table: keyof typeof PARTY, { id, email }: { id: str
        }
      }`,
     { id, email: cleanEmail(email), companyId: requireCompanyId() },
-    { admin: true },
   );
   const row = data[`update_${table}`].returning[0];
   if (!row) throw new Error(`${label} not found`);
@@ -379,7 +379,6 @@ export const resolvers = {
       const data = await hasura(
         `query CompanySettings($id: uuid!) { companies_by_pk(id: $id) { ${COMPANY_SEL} } }`,
         { id: requireCompanyId() },
-        { admin: true },
       );
       return mapCompanySettings(data.companies_by_pk);
     },
@@ -424,7 +423,6 @@ export const resolvers = {
            }
          }`,
         { limit: limit ?? 20 },
-        { admin: true },
       );
       return data.demo_requests.map(mapDemoRequest);
     },
@@ -435,10 +433,6 @@ export const resolvers = {
       requireRole("approver", "admin");
       const companyId = requireCompanyId();
       const data = await hasura(
-        // admin: the frontend's approve writes invoices.approval_status directly,
-        // which Hasura's `approver` role isn't granted — the BFF gate above is
-        // the authority here. company_id filter/set: {admin:true} bypasses
-        // Hasura's own tenant filtering, so this resolver enforces it instead.
         `mutation Approve($ids: [uuid!]!, $companyId: uuid!, $rows: [approvals_insert_input!]!) {
            update_invoices(
              where: { id: { _in: $ids }, company_id: { _eq: $companyId }, approval_status: { _eq: "pending" } }
@@ -449,12 +443,13 @@ export const resolvers = {
         {
           ids,
           companyId,
+          // company_id isn't a field here — the insert permission auto-fills
+          // it from the session, so it's not part of approvals_insert_input.
           rows: ids.map((id) => ({
-            invoice_id: id, company_id: companyId, approver: "you", level: 1, status: "approved",
+            invoice_id: id, approver: "you", level: 1, status: "approved",
             acted_at: new Date().toISOString(),
           })),
         },
-        { admin: true },
       );
       return data.update_invoices.returning.map(mapInvoice);
     },
@@ -475,9 +470,8 @@ export const resolvers = {
          }`,
         {
           id, status: s, companyId,
-          row: [{ invoice_id: id, company_id: companyId, approver: "you", level: 1, status: s, acted_at: new Date().toISOString(), }],
+          row: [{ invoice_id: id, approver: "you", level: 1, status: s, acted_at: new Date().toISOString(), }],
         },
-        { admin: true }, // writes invoices.approval_status — see approveInvoices
       );
       void note;
       return mapInvoice(data.update_invoices.returning[0]);
@@ -526,7 +520,6 @@ export const resolvers = {
            invoices_by_pk(id: $id) { approval_status direction company_id invoice_number customer { name email } }
          }`,
         { id: invoiceId },
-        { admin: true },
       );
       if (gate.invoices_by_pk?.company_id !== companyId) throw new Error("Invoice not found");
       const isReceivable = gate.invoices_by_pk?.direction === "receivable";
@@ -545,11 +538,13 @@ export const resolvers = {
            update_invoices(where: { id: { _eq: $id }, company_id: { _eq: $companyId } }, _set: { payment_status: "paid"${extra} }) { affected_rows }
          }`,
         {
-          p: { invoice_id: invoiceId, company_id: companyId, paid_at: paidAt, amount_paid: amountPaid },
+          // company_id isn't a field here — finance_user/company_admin's
+          // insert permission auto-fills it from the session (X-Hasura-Company-Id),
+          // so it's not part of their payments_insert_input type at all.
+          p: { invoice_id: invoiceId, paid_at: paidAt, amount_paid: amountPaid },
           id: invoiceId,
           companyId,
         },
-        { admin: true }, // one atomic insert-payment + mark-paid; BFF-gated above
       );
       const p = data.insert_payments_one;
 
@@ -575,7 +570,10 @@ export const resolvers = {
     async createInvoice(_: unknown, { input }: { input: any }) {
       requireRole("finance_user"); // invoice entry is finance_user's job, not admin's
       const companyId = requireCompanyId();
-      const o: any = { ...toInsert(input), company_id: companyId };
+      // company_id isn't a field on the insert object — finance_user's insert
+      // permission auto-fills it from the session, so it's not part of
+      // invoices_insert_input for this role at all.
+      const o: any = toInsert(input);
       const partyCol = o.direction === "receivable" ? "customer_id" : "vendor_id";
       const partyId = o.direction === "receivable" ? o.customer_id : o.vendor_id;
       const dup = await hasura(
@@ -585,7 +583,6 @@ export const resolvers = {
            }
          }`,
         { p: partyId, n: o.invoice_number, companyId },
-        { admin: true },
       );
       if (dup.invoices.length > 0) {
         throw new Error(
@@ -597,7 +594,6 @@ export const resolvers = {
       const data = await hasura(
         `mutation Create($o: invoices_insert_input!) { insert_invoices_one(object: $o) { ${INVOICE_SEL} } }`,
         { o },
-        { admin: true },
       );
       return mapInvoice(data.insert_invoices_one);
     },
@@ -621,7 +617,6 @@ export const resolvers = {
            }
          }`,
         { id, companyId: requireCompanyId() },
-        { admin: true }, // invoices has no per-role delete perm; BFF-gated above
       );
       if (!data.delete_invoices.returning.length) throw new Error("Invoice not found");
       return true;
@@ -637,9 +632,12 @@ export const resolvers = {
       },
     ) {
       requireRole("finance_user", "admin");
+      requireCompanyId(); // no-session guard — the insert itself needs no company_id field, see below
       const clean = String(name ?? "").trim();
       if (!clean) throw new Error("Vendor name is required");
       const data = await hasura(
+        // company_id isn't a field here — the insert permission auto-fills
+        // it from the session.
         `mutation AddVendor($o: vendors_insert_input!) {
            insert_vendors_one(object: $o) { id name tax_id payment_terms_days email }
          }`,
@@ -649,10 +647,8 @@ export const resolvers = {
             tax_id: (taxId ?? "").trim() || null,
             payment_terms_days: paymentTermsDays ?? 30,
             email: cleanEmail(email),
-            company_id: requireCompanyId(),
           },
         },
-        { admin: true }, // vendors has no per-role insert perm; BFF-gated above
       );
       return mapVendor(data.insert_vendors_one);
     },
@@ -671,9 +667,12 @@ export const resolvers = {
       },
     ) {
       requireRole("finance_user", "admin");
+      requireCompanyId(); // no-session guard — the insert itself needs no company_id field, see below
       const clean = String(name ?? "").trim();
       if (!clean) throw new Error("Customer name is required");
       const data = await hasura(
+        // company_id isn't a field here — the insert permission auto-fills
+        // it from the session.
         `mutation AddCustomer($o: customers_insert_input!) {
            insert_customers_one(object: $o) {
              id name tax_id payment_terms_days email credit_limit
@@ -686,10 +685,8 @@ export const resolvers = {
             payment_terms_days: paymentTermsDays ?? 30,
             email: cleanEmail(email),
             credit_limit: creditLimit == null ? null : Number(creditLimit),
-            company_id: requireCompanyId(),
           },
         },
-        { admin: true }, // customers has no per-role insert perm; BFF-gated above
       );
       return mapCustomer(data.insert_customers_one);
     },
@@ -718,7 +715,6 @@ export const resolvers = {
           state: state?.trim() || null,
           companyId: requireCompanyId(),
         },
-        { admin: true },
       );
       if (!data.update_customers.returning.length) throw new Error("Customer not found");
       return mapCustomer(data.update_customers.returning[0]);
@@ -740,7 +736,6 @@ export const resolvers = {
            ) { returning { ${INVOICE_SEL} } }
          }`,
         { id, s, companyId: requireCompanyId() },
-        { admin: true },
       );
       const row = data.update_invoices.returning[0];
       if (!row) throw new Error("Receivable not found");
@@ -761,7 +756,6 @@ export const resolvers = {
            }
          }`,
         { id: requireCompanyId(), name: clean, aliases: cleanAliases },
-        { admin: true },
       );
       return mapCompanySettings(data.update_companies_by_pk);
     },
@@ -778,7 +772,6 @@ export const resolvers = {
            }
          }`,
         { id: requireCompanyId(), url: dataUrl },
-        { admin: true },
       );
       return mapCompanySettings(data.update_companies_by_pk);
     },
@@ -795,7 +788,6 @@ export const resolvers = {
            }
          }`,
         { id: requireCompanyId(), url: dataUrl },
-        { admin: true },
       );
       return mapCompanySettings(data.update_companies_by_pk);
     },
@@ -842,7 +834,6 @@ export const resolvers = {
           bankIfsc: clean(args.bankIfsc),
           bankSwift: clean(args.bankSwift),
         },
-        { admin: true },
       );
       return mapCompanySettings(data.update_companies_by_pk);
     },
@@ -850,7 +841,7 @@ export const resolvers = {
     async setReviewQueueStatus(_: unknown, { id, status }: { id: string; status: string }) {
       requireRole("finance_user", "admin");
       // review_queue's update_permission for finance_user only grants the
-      // `status` column — no {admin:true} needed, Hasura's own perms are enough.
+      // `status` column — Hasura's own perms are enough, no admin secret.
       const data = await hasura(
         `mutation SetReviewQueueStatus($id: uuid!, $status: String!) {
            update_review_queue_by_pk(pk_columns: { id: $id }, _set: { status: $status }) {
@@ -895,7 +886,6 @@ export const resolvers = {
       const data = await hasura(
         `mutation DeleteDemoRequest($id: uuid!) { delete_demo_requests_by_pk(id: $id) { id } }`,
         { id },
-        { admin: true },
       );
       return Boolean(data.delete_demo_requests_by_pk);
     },

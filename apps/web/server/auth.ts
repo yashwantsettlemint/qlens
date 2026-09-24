@@ -18,9 +18,10 @@ export const currentClaims = (): Claims | null =>
  * handler already rejects *invalid* tokens outright.
  */
 /**
- * The signed-in caller's company_id — every `{admin: true}` mutation in
- * server/resolvers.ts (which bypasses Hasura's own company_id permission
- * filters) must scope its where/insert by this, or it reaches across tenants.
+ * The signed-in caller's company_id. Hasura's own permissions now filter
+ * every table by this already (via the session JWT's x-hasura-company-id),
+ * but resolvers in server/resolvers.ts also pass it explicitly in their
+ * where/insert clauses as defense in depth.
  * No session (demo/offline mode) -> null, and callers fall back to the
  * pre-multi-tenant behavior of not filtering by company.
  */

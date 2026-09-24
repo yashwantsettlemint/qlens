@@ -36,6 +36,12 @@ from app.dup_features import DUP_FEATURE_NAMES, pair_features
 # positives (precision falls to 0.70-0.79), which is its own way of causing
 # missed duplicates once people stop trusting the flag.
 DEFAULT_THRESHOLD = 0.3
+# Retraining from reviewed flags (source="hasura") uses a stricter cut: that
+# training set is small and its positives are near-copies, so at 0.3 the
+# model flagged ~a third of adjacent same-party invoices; 0.6 kept recall
+# (44/50 real duplicates) with 1 false positive across every same-party pair
+# under 60 days apart. app/retrain.py passes this.
+HASURA_THRESHOLD = 0.6
 
 
 def _row_side(r, prefix: str) -> dict:

@@ -20,6 +20,8 @@ import logging
 
 from fastapi import Depends, FastAPI, HTTPException
 from shared_types.auth import require_internal_token
+from shared_types.logging import configure_logging
+from shared_types.secrets_check import assert_production_secrets_configured
 
 from . import ModelUnavailable
 from .config import MODEL_PATH
@@ -38,7 +40,8 @@ from .db import (
 )
 from .hasura import HasuraError, fetch_context, fetch_open_invoices
 
-logging.basicConfig(level=logging.INFO)
+configure_logging("ml-service")
+assert_production_secrets_configured("HASURA_GRAPHQL_JWT_SECRET", "INTERNAL_SERVICE_TOKEN")
 log = logging.getLogger("ml-service")
 app = FastAPI(title="ml-service", version="0.1.0")
 

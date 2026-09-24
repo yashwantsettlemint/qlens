@@ -57,7 +57,42 @@ insert_permissions:
         - payment_status
         - source
         - created_by
+        - template
+        - buyer_order_no
+        - ack_no
+  - role: company_admin
+    permission:
+      check: {}
+      set:
+        company_id: X-Hasura-Company-Id
+      columns:
+        - invoice_number
+        - description
+        - extracted_text
+        - direction
+        - vendor_id
+        - customer_id
+        - po_id
+        - invoice_date
+        - due_date
+        - amount
+        - tax_amount
+        - department
+        - approval_status
+        - collection_status
+        - payment_status
+        - source
+        - created_by
+        - template
+        - buyer_order_no
+        - ack_no
 select_permissions:
+  - role: payments_webhook
+    permission:
+      columns:
+        - id
+        - company_id
+      filter: {}
   - role: finance_user
     permission:
       columns: "*"
@@ -162,12 +197,51 @@ update_permissions:
         - created_by
       filter: { company_id: { _eq: X-Hasura-Company-Id } }
       check: {}
+  - role: company_admin
+    permission:
+      columns:
+        - invoice_number
+        - description
+        - vendor_id
+        - customer_id
+        - po_id
+        - invoice_date
+        - due_date
+        - amount
+        - tax_amount
+        - department
+        - approval_status
+        - collection_status
+        - payment_status
+        - source
+        - created_by
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      check: {}
+  - role: approver
+    permission:
+      columns:
+        - approval_status
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+      check: {}
   - role: notifier
     permission:
       columns:
         - payment_status
       filter: {}
       check: {}
+  - role: payments_webhook
+    permission:
+      columns:
+        - payment_status
+      filter: {}
+      check: {}
+delete_permissions:
+  - role: finance_user
+    permission:
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
+  - role: company_admin
+    permission:
+      filter: { company_id: { _eq: X-Hasura-Company-Id } }
 event_triggers:
   - name: invoice_ml_score
     definition:

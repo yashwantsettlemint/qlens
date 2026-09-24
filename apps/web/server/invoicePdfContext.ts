@@ -105,11 +105,10 @@ export function lineItemInsertRow(
     gstRate?: number | null;
   },
   invoiceId: string,
-  companyId: string,
 ) {
+  // No company_id field — the insert permission auto-fills it from the session.
   return {
     invoice_id: invoiceId,
-    company_id: companyId,
     description: li.description,
     note: li.note ?? null,
     quantity: li.quantity,

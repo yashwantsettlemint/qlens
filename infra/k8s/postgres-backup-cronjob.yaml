@@ -1,0 +1,48 @@
+# Nightly pg_dump of every database on the shared Postgres instance, to a
+# PVC. No offsite/S3 shipping here — mount a different volume (or add an
+# `aws s3 cp` step) once you have somewhere to ship it. Restore:
+#   kubectl exec -n invoice-tracker deploy/postgres -- \
+#     psql -U postgres -d <db> < <(kubectl exec -n invoice-tracker <backup-pod> -- cat /backups/<file>)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backups
+  namespace: invoice-tracker
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources: { requests: { storage: 20Gi } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: invoice-tracker
+spec:
+  schedule: "0 3 * * *" # 03:00 daily
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: pgvector/pgvector:pg16
+              envFrom:
+                - secretRef: { name: invoice-tracker-secrets }
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  ts=$(date +%Y%m%d-%H%M%S)
+                  for db in invoice_tracker ocr_db genai_db ml_db; do
+                    pg_dump "postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/${db}" \
+                      | gzip > "/backups/${db}-${ts}.sql.gz"
+                  done
+                  # keep 14 days per database
+                  find /backups -name '*.sql.gz' -mtime +14 -delete
+              volumeMounts:
+                - { name: backups, mountPath: /backups }
+          volumes:
+            - name: backups
+              persistentVolumeClaim: { claimName: postgres-backups }

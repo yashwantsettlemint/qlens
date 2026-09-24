@@ -124,8 +124,20 @@ export const INVOICE_COLUMNS: Record<string, Column<InvoiceRow>> = {
     key: "duplicate",
     header: "Dup",
     sortable: true,
-    sortValue: (r) => (r.duplicateFlag ? 1 : 0),
-    cell: (r) => (r.duplicateFlag ? <DuplicateBadge /> : <span className="text-ink-muted">—</span>),
+    // A cleared flag (reviewedStatus "false_positive") stays in the DB as a
+    // record of the review, but shouldn't keep showing as a live duplicate.
+    sortValue: (r) => (r.duplicateFlag && r.duplicateFlag.reviewedStatus !== "false_positive" ? 1 : 0),
+    cell: (r) =>
+      r.duplicateFlag && r.duplicateFlag.reviewedStatus !== "false_positive" ? (
+        <div className="flex flex-col items-start gap-0.5">
+          <DuplicateBadge />
+          {r.duplicateFlag.matchedInvoice && (
+            <span className="tabular text-xs text-ink-muted">of {r.duplicateFlag.matchedInvoice.invoiceNumber}</span>
+          )}
+        </div>
+      ) : (
+        <span className="text-ink-muted">—</span>
+      ),
   },
   risk: {
     key: "risk",

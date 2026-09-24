@@ -220,7 +220,7 @@ function AskInvoiceList({
               <td className="px-2 py-1.5">
                 <div className="flex items-center justify-end gap-1">
                   <RiskDot pred={inv.delayPrediction} />
-                  {inv.duplicateFlag && <DuplicateBadge />}
+                  {inv.duplicateFlag && inv.duplicateFlag.reviewedStatus !== "false_positive" && <DuplicateBadge />}
                   <ApprovalBadge status={inv.approvalStatus} />
                   <PaymentBadge status={inv.paymentStatus} />
                 </div>

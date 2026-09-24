@@ -45,6 +45,11 @@ async def retrain_model(model_name: str, triggered_by: str, company_id: str) -> 
     )
 
     trainer = _trainers()[model_name]
+    extra = {}
+    if model_name == "duplicate":
+        from ml.train_duplicates import HASURA_THRESHOLD
+
+        extra["threshold"] = HASURA_THRESHOLD
     loop = asyncio.get_event_loop()
     try:
         # trainer() calls asyncio.run() internally for its Hasura fetch, so it
@@ -52,7 +57,7 @@ async def retrain_model(model_name: str, triggered_by: str, company_id: str) -> 
         # not positional args — ml.train.train and ml.train_duplicates.train
         # don't share a parameter order past `source`.
         result = await loop.run_in_executor(
-            None, functools.partial(trainer, "hasura", company_id=company_id)
+            None, functools.partial(trainer, "hasura", company_id=company_id, **extra)
         )
     except SystemExit as exc:
         await db.update_retrain_event(event_id, {

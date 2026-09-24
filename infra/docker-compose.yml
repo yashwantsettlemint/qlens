@@ -157,16 +157,56 @@ services:
       <<: *pyhealth
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8004/health')\""]
 
-  auth-service:  # DB-backed accounts -> Hasura-shaped HS256 JWTs; register/invite live here
+  keycloak:  # real OIDC IdP — credentials + brute-force lockout live here now
+    image: quay.io/keycloak/keycloak:26.0
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_ENABLED: "true"
+      # Both var names set — Keycloak's admin-bootstrap env var was renamed
+      # across major versions (KEYCLOAK_ADMIN* -> KC_BOOTSTRAP_ADMIN_*).
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      # Fixed hostname (the full URL form, not just a bare hostname — Keycloak's
+      # v2 hostname provider otherwise keeps whatever port/scheme the request
+      # actually arrived on) so every token Keycloak issues carries the same
+      # `iss` regardless of whether the request came from the browser
+      # (localhost:8097, via the host port mapping below) or from another
+      # container (http://keycloak:8080, the compose network's own DNS) —
+      # see auth.ts's PUBLIC_ISSUER/INTERNAL_ISSUER split.
+      KC_HOSTNAME: http://localhost:8097
+    command: ["start-dev", "--import-realm"]
+    ports:
+      - "8097:8080"
+    volumes:
+      - ../infra/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    healthcheck:
+      # KC_HEALTH_ENABLED exposes /health on the management port (9000), not
+      # the main HTTP port (8080) — probing 8080 here always fails even when
+      # Keycloak itself is up and serving the realm fine.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nhost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q 'UP' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+
+  auth-service:  # company/role bookkeeping -> Hasura-shaped HS256 JWTs; register/invite live here.
+                 # Credentials + brute-force lockout are Keycloak's job (see infra/keycloak).
     build:
       context: ..
       dockerfile: services/auth-service/Dockerfile
     restart: unless-stopped
     env_file: [.env]
+    environment:
+      KEYCLOAK_URL: http://keycloak:8080
     ports:
       - "8095:8005"
     depends_on:
       postgres:
+        condition: service_healthy
+      keycloak:
         condition: service_healthy
     healthcheck:
       <<: *pyhealth
@@ -211,6 +251,14 @@ services:
       # same way for container-to-container calls.
       HASURA_ENDPOINT: http://hasura:8080/v1/graphql
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      # Browser-facing vs container-to-container Keycloak URL — see auth.ts.
+      AUTH_KEYCLOAK_ISSUER: http://localhost:8097/realms/invoice-tracker
+      KEYCLOAK_INTERNAL_ISSUER: http://keycloak:8080/realms/invoice-tracker
+      # NextAuth's own AUTH_TRUST_HOST header-based detection reports this
+      # standalone server's bind address (0.0.0.0:3000) instead of the
+      # actual host-mapped port behind docker-compose — set explicitly
+      # instead of relying on auto-detection.
+      AUTH_URL: http://localhost:3002
     ports:
       # host 3002 — 3000/3001 are commonly taken by a local `next dev` or another
       # tool; container still listens on 3000.
@@ -219,6 +267,8 @@ services:
       hasura:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      keycloak:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/',r=>process.exit(0)).on('error',()=>process.exit(1))\""]

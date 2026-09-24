@@ -127,7 +127,7 @@ export default function InvoiceDetailPage(props: { params: Promise<{ id: string 
             <ApprovalBadge status={inv.approvalStatus} />
             <PaymentBadge status={inv.paymentStatus} />
             {inv.daysOverdue > 0 && <OverdueBadge days={inv.daysOverdue} />}
-            {inv.duplicateFlag && <DuplicateBadge />}
+            {inv.duplicateFlag && inv.duplicateFlag.reviewedStatus !== "false_positive" && <DuplicateBadge />}
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
