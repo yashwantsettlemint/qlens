@@ -70,7 +70,8 @@ jobs:
           for d in services/*/; do pip install -e "$d"; done
       - name: pip-audit (fail on known vulnerabilities)
         run: |
-          pip install pip-audit
+          # pip itself is audited too; the runner's bundled pip predates recent advisories.
+          pip install -U pip pip-audit
           # No --strict: it fails on any skipped dep, and this repo's own
           # editable packages (not on PyPI) are always skipped. Known
           # vulnerabilities still fail the step.
