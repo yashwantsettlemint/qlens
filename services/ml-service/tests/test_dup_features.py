@@ -50,11 +50,15 @@ def run() -> None:
     orig = duplicates._load_model
     duplicates._load_model = lambda company_id: _FAKE_MODEL
     try:
+        # Flagging is strict: only a re-entry with every field identical reaches the model.
         cand = {"id": "c1", **NEAR[0]}
-        existing = [{"id": "e1", **NEAR[1]}, {"id": "e2", **FAR[1]}]
+        existing = [{"id": "e1", **NEAR[0]}, {"id": "e2", **FAR[1]}]
         m = duplicates.detect(cand, existing, "company-1")
         assert m and m.matched_invoice_id == "e1" and m.method == "ml", m
         assert 0.5 <= m.confidence_score <= 1.0
+
+        # near-miss (3 days apart, "O455" vs "0455") is >90% similar but not identical -> no flag
+        assert duplicates.detect(cand, [{"id": "e1", **NEAR[1]}], "company-1") is None
 
         # nothing similar enough -> no flag
         assert duplicates.detect(cand, [{"id": "e2", **FAR[1]}], "company-1") is None
